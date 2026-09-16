@@ -1,0 +1,7 @@
+{
+  "name": "AIPEX VeriBot",
+  "description": "Platform Pra-Pemeriksaan Berkas Kependudukan Berbasis AI - Kelurahan Sukamaju (DIGIForward 2026)",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

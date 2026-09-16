@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "vite build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api_tickets.php", "destination": "/api/admin/tickets" },
+    { "source": "/api/:path*", "destination": "/api/:path*" }
+  ],
+  "functions": {
+    "api/scan-document.ts": { "maxDuration": 60, "memory": 1024 },
+    "api/ocr.ts": { "maxDuration": 60, "memory": 1024 },
+    "api/chat-faq.ts": { "maxDuration": 30 }
+  }
+}

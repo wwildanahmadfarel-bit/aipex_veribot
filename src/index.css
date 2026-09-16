@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@keyframes scan-beam {
+  0% { top: 0%; opacity: 0.8; }
+  50% { top: 92%; opacity: 1; }
+  100% { top: 0%; opacity: 0.8; }
+}
+
+.animate-scan-beam {
+  animation: scan-beam 2.5s ease-in-out infinite;
+}
+
+/* Custom styles for tabular numbers in citizen tickets */
+.font-code-num {
+  font-family: 'Inter', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+}
+
+h1, h2, h3, .font-heading {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
