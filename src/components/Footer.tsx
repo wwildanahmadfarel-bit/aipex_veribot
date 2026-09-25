@@ -2,11 +2,23 @@ import React from "react";
 
 interface FooterProps {
   onNavigateHome: () => void;
+  /** Navigasi terjaga ke section portal (melewati popup konfirmasi saat mode officer). */
+  onRequestNav?: (targetId: string, destLabel: string) => void;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigateHome }) => {
+export const Footer: React.FC<FooterProps> = ({ onNavigateHome, onRequestNav }) => {
+  const goSection = (targetId: string, destLabel: string) => {
+    if (onRequestNav) {
+      onRequestNav(targetId, destLabel);
+      return;
+    }
+    onNavigateHome();
+    setTimeout(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth" });
+    }, 150);
+  };
   return (
-    <footer className="w-full bg-[#213145] text-slate-300 py-12 px-4 lg:px-8 mt-16 border-t border-slate-700/60">
+    <footer className="w-full bg-[#1E293B] text-slate-300 py-12 px-4 lg:px-8 mt-16 border-t border-slate-700/60">
       <div className="max-w-[1200px] mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 pb-12 border-b border-slate-700/60">
         {/* Brand Col */}
         <div className="flex flex-col gap-4">
@@ -23,11 +35,11 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateHome }) => {
             mendukung efisiensi birokrasi berkecepatan tinggi dengan validasi dokumen otomatis.
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0b1c30] text-[11px] font-semibold text-emerald-400 border border-emerald-500/30">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1E293B] text-[11px] font-semibold text-emerald-400 border border-emerald-500/30">
               <span className="material-symbols-outlined text-[14px]">verified_user</span>
               UU PDP Compliant
             </span>
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0b1c30] text-[11px] font-semibold text-blue-300 border border-blue-500/30">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1E293B] text-[11px] font-semibold text-blue-300 border border-blue-500/30">
               <span className="material-symbols-outlined text-[14px]">psychology</span>
               Cognitive AI Powered
             </span>
@@ -41,29 +53,29 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateHome }) => {
           </span>
           <div className="flex flex-col gap-2 text-sm text-slate-400">
             <button
-              onClick={onNavigateHome}
+              onClick={() => goSection("portalView", "Katalog Layanan")}
               className="text-left hover:text-white transition-colors cursor-pointer"
             >
               Katalog Layanan Online
             </button>
-            <a
-              href="#lacakSection"
-              className="hover:text-white transition-colors cursor-pointer"
+            <button
+              onClick={() => goSection("lacakSection", "Pelacakan Tiket QR")}
+              className="text-left hover:text-white transition-colors cursor-pointer"
             >
               Pelacakan Tiket QR
-            </a>
-            <a
-              href="#alurLayanan"
-              className="hover:text-white transition-colors cursor-pointer"
+            </button>
+            <button
+              onClick={() => goSection("alurLayanan", "Panduan Prosedur Warga")}
+              className="text-left hover:text-white transition-colors cursor-pointer"
             >
               Panduan Prosedur Warga
-            </a>
-            <a
-              href="#faqSection"
-              className="hover:text-white transition-colors cursor-pointer"
+            </button>
+            <button
+              onClick={() => goSection("faqSection", "Pusat Bantuan & Regulasi")}
+              className="text-left hover:text-white transition-colors cursor-pointer"
             >
               Pusat Bantuan & Regulasi
-            </a>
+            </button>
           </div>
         </div>
 

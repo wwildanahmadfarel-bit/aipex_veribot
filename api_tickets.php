@@ -1,4 +1,6 @@
 <?php
+// DEPRECATED — jalur aktif: PATCH /api/admin/tickets (api/admin/tickets.ts + api/_lib/wa.ts via Fonnte).
+// File ini hanya referensi template pesan + rewrite legacy (vercel.json: /api_tickets.php -> /api/admin/tickets).
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Headers: Content-Type, Authorization");
 header("Access-Control-Allow-Methods: GET, POST, PATCH, OPTIONS");

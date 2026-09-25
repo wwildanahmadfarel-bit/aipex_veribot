@@ -2,6 +2,21 @@ import React, { useState, useRef, useEffect } from "react";
 import QRCode from "qrcode";
 import confetti from "canvas-confetti";
 import { Ticket, VerificationResult, PreScreenInitialData } from "../types";
+import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
+import { AipexLogo } from "./AipexLogo";
+import { jenisLabel } from "./OcrPreScreenCard";
+import { catalogServices } from "../data/servicesData";
+import {
+  PAGE_STARTED_AT,
+  formatCountdown,
+  getCooldownSec,
+  getQuotaState,
+  getTurnstileSiteKey,
+  getTurnstileToken,
+  isQuotaFreeCode,
+  recordScanAttempt,
+  setCooldown,
+} from "../lib/antiSpam";
 
 interface InteractiveWizardProps {
   initialService?: string;
@@ -26,9 +41,28 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const [alamat, setAlamat] = useState<string>("");
 
   // Step 2: Upload Data
+  // Slot 0 (docImageBase64) = dokumen UTAMA, dipindai AI di Langkah 3.
+  // Slot 1..N (supportFiles) = berkas pendukung WAJIB sesuai syarat layanan.
   const [docImageBase64, setDocImageBase64] = useState<string | null>(null);
   const [docImageName, setDocImageName] = useState<string>("");
-  const [useSampleType, setUseSampleType] = useState<"clean" | "blurry" | null>(null);
+  const [supportFiles, setSupportFiles] = useState<{ base64: string; name: string }[]>([]);
+
+  // Daftar berkas WAJIB mengikuti syarat layanan (badge WAJIB di katalog).
+  // Sumber kebenaran tunggal: servicesData.ts — ubah di sana bila ketentuan berubah.
+  const requiredDocs = (() => {
+    const svc = catalogServices.find((s) => s.title === selectedService);
+    const wajib = svc?.requirements.filter((r) => r.mandatory) || [];
+    if (wajib.length > 0) return wajib;
+    return [{ title: "Foto Dokumen Kependudukan", description: "Foto asli dokumen (JPG/PNG/WEBP).", mandatory: true }];
+  })();
+  const supportDocs = requiredDocs.slice(1);
+
+  /** Reset seluruh file saat ganti jenis urusan (slot mengikuti syarat layanan baru). */
+  const resetAllUploads = () => {
+    setDocImageBase64(null);
+    setDocImageName("");
+    setSupportFiles([]);
+  };
 
   // Step 3: AI Scanner & Verification
   const [isScanning, setIsScanning] = useState<boolean>(false);
@@ -37,6 +71,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
   // Step 4: Generated Ticket
   const [generatedTicket, setGeneratedTicket] = useState<Ticket | null>(null);
+  // true = nomor WA ikut tersimpan di DB (prefill modal petugas otomatis).
+  const [phoneSaved, setPhoneSaved] = useState<boolean | null>(null);
+  // Bukti yang sama untuk tiket hasil pindai (respons /api/scan-document).
+  const [scanPhoneSaved, setScanPhoneSaved] = useState<boolean | null>(null);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Update selectedService when initialService prop changes
@@ -86,70 +124,6 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       "Penerbitan surat pengantar keterangan usaha warga untuk legalitas & perbankan.",
   };
 
-  // Presets
-  const applyPreset = (type: "clean" | "blurry") => {
-    setUseSampleType(type);
-    if (type === "clean") {
-      setNik("3201011504950001");
-      setNama("Ahmad Santoso");
-      setWa("081234567890");
-      setAlamat("Jl. Cempaka Raya No. 12 RT 03/05");
-      // Create a clean mock canvas data URL as sample KTP
-      const canvas = document.createElement("canvas");
-      canvas.width = 600;
-      canvas.height = 380;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.fillStyle = "#1e3a8a";
-        ctx.fillRect(0, 0, 600, 70);
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 20px sans-serif";
-        ctx.fillText("REPUBLIK INDONESIA - KTP ELEKTRONIK", 100, 42);
-        ctx.fillStyle = "#eff6ff";
-        ctx.fillRect(0, 70, 600, 310);
-        ctx.fillStyle = "#0f172a";
-        ctx.font = "bold 22px monospace";
-        ctx.fillText("NIK: 3201011504950001", 40, 120);
-        ctx.font = "16px sans-serif";
-        ctx.fillText("Nama: AHMAD SANTOSO", 40, 160);
-        ctx.fillText("Tempat/Tgl Lahir: SEMARANG, 15-04-1995", 40, 195);
-        ctx.fillText("Alamat: JL. CEMPAKA RAYA NO. 12 RT 03/05", 40, 230);
-        ctx.fillText("Gol. Darah: O    Jenis Kelamin: LAKI-LAKI", 40, 265);
-        // Photo box
-        ctx.fillStyle = "#93c5fd";
-        ctx.fillRect(450, 110, 110, 150);
-        ctx.fillStyle = "#1e3a8a";
-        ctx.font = "12px sans-serif";
-        ctx.fillText("FOTO WARGA", 465, 190);
-        // Chip
-        ctx.fillStyle = "#fbbf24";
-        ctx.fillRect(40, 300, 45, 35);
-      }
-      setDocImageBase64(canvas.toDataURL("image/jpeg"));
-      setDocImageName("e-KTP_Ahmad_Santoso_Jelas.jpg");
-    } else {
-      setNik("3201017849200003");
-      setNama("Budi Hermawan");
-      setWa("085712349988");
-      setAlamat("Komplek Permata Blok B2 No. 8");
-      // Create a blurry mock canvas data URL
-      const canvas = document.createElement("canvas");
-      canvas.width = 500;
-      canvas.height = 320;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.fillStyle = "#94a3b8";
-        ctx.fillRect(0, 0, 500, 320);
-        ctx.fillStyle = "#cbd5e1";
-        ctx.font = "bold 16px sans-serif";
-        ctx.fillText("KTP-EL [Buram / Silau Pantulan Cahaya]", 50, 140);
-        ctx.fillText("NIK: 320101******???? (4 Digit Terpotong)", 50, 180);
-      }
-      setDocImageBase64(canvas.toDataURL("image/jpeg"));
-      setDocImageName("e-KTP_Budi_Hermawan_AgakBuram.jpg");
-    }
-  };
-
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -161,14 +135,52 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Step 1 Validation
+  /** Unggah berkas pendukung wajib (slot mengikuti urutan syarat layanan). */
+  const handleSupportUpload = (slot: number, file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSupportFiles((prev) => {
+        const next = [...prev];
+        next[slot] = { base64: reader.result as string, name: file.name };
+        return next;
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeSupportFile = (slot: number) => {
+    // Pertahankan indeks slot (jangan filter) agar selaras dengan urutan syarat.
+    setSupportFiles((prev) => {
+      const next = [...prev];
+      next[slot] = { base64: "", name: "" };
+      return next;
+    });
+  };
+
+  /** Judul syarat yang berkasnya BELUM diunggah (untuk pesan validasi). */
+  const getMissingDocs = (): string[] => {
+    const missing: string[] = [];
+    if (!docImageBase64) missing.push(requiredDocs[0]?.title || "Dokumen utama");
+    supportDocs.forEach((req, i) => {
+      if (!supportFiles[i]?.base64) missing.push(req.title);
+    });
+    return missing;
+  };
+
+  // Step 1 Validation — NIK 16 digit angka + WA format Indonesia.
+  const isValidWa = (v: string) => /^(08\d{8,12}|628\d{8,12}|\+628\d{8,12})$/.test(v.replace(/[\s-]/g, ""));
   const handleProceedToStep2 = () => {
     if (!nik.trim() || !nama.trim() || !wa.trim()) {
       alert("Mohon lengkapi NIK, Nama Lengkap, dan Nomor WhatsApp aktif Anda terlebih dahulu.");
       return;
     }
-    if (nik.trim().length !== 16) {
-      alert("Nomor Induk Kependudukan (NIK) harus berjumlah tepat 16 digit angka.");
+    if (!/^\d{16}$/.test(nik.trim())) {
+      alert("Nomor Induk Kependudukan (NIK) harus tepat 16 digit angka (tanpa huruf/spasi).");
+      return;
+    }
+    if (!isValidWa(wa.trim())) {
+      alert("Nomor WhatsApp tidak valid. Gunakan format 08xxxxxxxxxx atau 628xxxxxxxxxx.");
       return;
     }
     setCurrentStep(2);
@@ -177,10 +189,19 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
   // Step 2 Validation & trigger Scan Step
   const handleStartAiScan = async () => {
-    // Wajib unggah foto dokumen asli — JANGAN palsukan dengan preset otomatis.
-    // (Tombol contoh tetap ada untuk demo, tapi harus diklik eksplisit oleh user.)
-    if (!docImageBase64) {
-      alert("Wajib unggah foto dokumen kependudukan terlebih dahulu. Tanpa foto, tiket tidak dapat diterbitkan.");
+    // Wajib unggah SEMUA berkas sesuai syarat WAJIB layanan — bukan cuma 1 foto.
+    // (Dokumen utama dipindai AI; sisanya dilampirkan untuk verifikasi loket.)
+    const missing = getMissingDocs();
+    if (missing.length > 0) {
+      alert(
+        `Berkas wajib belum lengkap (${missing.length}/${requiredDocs.length}). Yang belum diunggah:\n• ${missing.join("\n• ")}`
+      );
+      return;
+    }
+    // Anti-spam: cooldown lokal 30 detik antar-pindaian.
+    const cdLeft = getCooldownSec();
+    if (cdLeft > 0) {
+      alert(`Terlalu cepat mengirim berkas. Tunggu ${formatCountdown(cdLeft)} sebelum memindai lagi.`);
       return;
     }
     setCurrentStep(3);
@@ -200,16 +221,63 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     }, 250);
 
     try {
-      const response = await fetch("/api/scan-document", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // Anti-spam: token manusia untuk percobaan terakhir + field bot-check.
+      const siteKey = getTurnstileSiteKey();
+      let turnstileToken: string | null = null;
+      if (siteKey && getQuotaState().remaining <= 1) {
+        turnstileToken = await getTurnstileToken(siteKey);
+      }
+      const buildBody = () =>
+        JSON.stringify({
           imageBase64: docImageBase64,
           serviceType: selectedService,
           inputNama: nama,
           inputNik: nik,
-        }),
-      });
+          // Nomor WA sudah diisi di langkah 1 — ikutkan agar tiket hasil pindai
+          // langsung punya nomor (prefill modal petugas otomatis).
+          phone: wa || undefined,
+          // Nama berkas pendukung wajib (dilampirkan, diverifikasi manual di loket).
+          lampiran: supportFiles.filter((f) => f?.base64).map((f) => f.name),
+          startedAt: PAGE_STARTED_AT,
+          website_confirm: "",
+          ...(turnstileToken ? { turnstileToken } : {}),
+        });
+      const postScan = () =>
+        fetch("/api/scan-document", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: buildBody(),
+        });
+      let response = await postScan();
+      // Captcha adaptif: 403 -> ambil token lalu ulangi SEKALI.
+      if (response.status === 403) {
+        const err0: any = await response.clone().json().catch(() => null);
+        if (err0?.captchaRequired || err0?.code === "CAPTCHA_REQUIRED") {
+          turnstileToken = await getTurnstileToken(siteKey);
+          if (turnstileToken) {
+            response = await postScan();
+          } else {
+            throw new Error(
+              "Verifikasi manusia diperlukan untuk pemindaian terakhir dan captcha gagal dimuat. Periksa koneksi lalu pindai ulang, atau lanjut via Isi Manual."
+            );
+          }
+        }
+      }
+      if (!response.ok) {
+        const errJ: any = await response.clone().json().catch(() => null);
+        if (!isQuotaFreeCode(errJ?.code)) recordScanAttempt();
+        setCooldown();
+        let msg = String(
+          errJ?.message || errJ?.error || `Gagal memindai dokumen (HTTP ${response.status})`
+        );
+        const ra = Number(errJ?.retryAfter);
+        if (response.status === 429 && Number.isFinite(ra) && ra > 0) {
+          msg += ` Coba lagi dalam ${formatCountdown(ra)}.`;
+        }
+        throw new Error(msg);
+      }
+      recordScanAttempt();
+      setCooldown();
       const data = await response.json();
       clearInterval(interval);
       setScanProgress(100);
@@ -235,14 +303,13 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
         return "BURAM";
       };
 
-      const isBlurrySample = useSampleType === "blurry";
       const parsed = data?.data || data || {};
       const jenisNorm = normalizeJenis(parsed.jenis_dokumen);
       let statusNorm = normalizeStatus(parsed.status_verifikasi);
       if (jenisNorm === "LAINNYA") statusNorm = "TIDAK_VALID";
       const tidakValid =
         statusNorm === "TIDAK_VALID" || jenisNorm === "LAINNYA" || data?.success === false;
-      // Backend baru: TIDAK_VALID → success:false tanpa tiket; BURAM valid → success:true + tiket QR.
+      // Backend: TIDAK_VALID → success:false tanpa tiket; BURAM valid → success:true + tiket QR.
       const backendGagal = data?.success === false;
       const skorBackend =
         typeof parsed.skor_kejelasan === "number"
@@ -252,18 +319,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             : 0;
 
       let result: VerificationResult;
-      if (isBlurrySample) {
-        result = {
-          nik,
-          nama,
-          jenis_dokumen: jenisNorm !== "LAINNYA" ? jenisNorm : "KTP",
-          status_kualitas: "GAGAL",
-          skor: 58,
-          catatan:
-            "Pantulan silau terdeteksi di sudut kanan bawah. 4 digit terakhir NIK tertutup pantulan cahaya. Disarankan unggah ulang foto yang lebih jelas.",
-          source: data.source,
-        };
-      } else if (tidakValid) {
+      if (tidakValid) {
         result = {
           nik: parsed.nik || "Tidak Terdeteksi",
           nama: parsed.nama || "Tidak Terbaca",
@@ -303,19 +359,29 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       }
 
       setVerificationResult(result);
+      // Bukti simpan nomor di tiket hasil pindai (untuk prefill modal petugas).
+      if (data && typeof (data as any).phoneSaved === "boolean") {
+        setScanPhoneSaved((data as any).phoneSaved);
+      } else {
+        setScanPhoneSaved(null);
+      }
       setIsScanning(false);
     } catch (err) {
       console.error(err);
       clearInterval(interval);
       setScanProgress(100);
-      // JANGAN palsukan LULUS saat jaringan gagal
+      // JANGAN palsukan LULUS saat gagal; tampilkan pesan jujur (termasuk info limit).
+      const rawMsg = err instanceof Error ? err.message : "";
+      const catatan = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMsg)
+        ? "Gagal menghubungi server OCR. Periksa koneksi lalu unggah ulang foto e-KTP asli."
+        : rawMsg || "Gagal menghubungi server OCR. Periksa koneksi lalu unggah ulang foto e-KTP asli.";
       setVerificationResult({
         nik: nik,
         nama: nama,
         jenis_dokumen: "LAINNYA",
         status_kualitas: "GAGAL",
         skor: 0,
-        catatan: "Gagal menghubungi server OCR. Periksa koneksi lalu unggah ulang foto e-KTP asli.",
+        catatan,
       });
       setIsScanning(false);
     }
@@ -326,8 +392,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   // Gangguan jaringan dibedakan pesannya agar tak disangka "bukan KTP".
   const handleGenerateTicket = async () => {
     const catatan = verificationResult?.catatan || "";
+    // Gangguan sistem/kunci AI juga diblokir seperti gangguan jaringan.
     const isNetworkError =
-      !!verificationResult && /gagal menghubungi|koneksi|jaringan/i.test(catatan);
+      !!verificationResult && /gagal menghubungi|koneksi|jaringan|gangguan sistem|sedang gangguan|kunci akses|sedang sibuk|petugas loket/i.test(catatan);
     if (isNetworkError) {
       alert(
         "Gagal menghubungi server OCR. Periksa koneksi lalu ulangi pindaian — tiket belum dapat diterbitkan."
@@ -352,6 +419,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           : verificationResult.jenis_dokumen === "LAINNYA"
             ? "TIDAK_VALID"
             : "BURAM";
+      const lampiranNames = [
+        docImageName || requiredDocs[0]?.title || "Dokumen utama",
+        ...supportFiles.filter((f) => f?.base64).map((f) => f.name),
+      ];
       const response = await fetch("/api/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -363,7 +434,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           jenis_dokumen: selectedService,
           skor_ai: verificationResult?.skor ?? 0,
           status_ai: verificationResult?.status_kualitas || "GAGAL",
-          catatan_ai: verificationResult?.catatan,
+          catatan_ai: `${verificationResult?.catatan || ""}\nLampiran berkas wajib (${lampiranNames.length}/${requiredDocs.length}): ${lampiranNames.join("; ")}.`,
+          lampiran: lampiranNames,
           // Bukti scan — backend WAJIB memvalidasi ini dan menolak LAINNYA/TIDAK_VALID
           scan_jenis_dokumen: verificationResult?.jenis_dokumen,
           scan_status_verifikasi: scanStatus,
@@ -380,6 +452,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
       if (response.ok && resData.success && resData.data) {
         setGeneratedTicket(resData.data);
+        // Bukti simpan nomor: false = kolom phone belum dimigrasi / DB mati.
+        setPhoneSaved(resData.phoneSaved === true);
         onTicketCreated(resData.data);
         setCurrentStep(4);
         window.scrollTo({ top: 100, behavior: "smooth" });
@@ -400,17 +474,17 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     }
   };
 
-  // Render QR Code in Step 4
+  // Render QR Code in Step 4 (teks rapi multi-baris, NIK mask — satu sumber)
   useEffect(() => {
     if (currentStep === 4 && generatedTicket && qrCanvasRef.current) {
       QRCode.toCanvas(
         qrCanvasRef.current,
-        `AIPEX-VERIBOT:${generatedTicket.ticket_code}|NIK:${generatedTicket.nik_encrypted}|STATUS:${generatedTicket.status_verifikasi}`,
+        buildTicketQrText(generatedTicket),
         {
           width: 180,
           margin: 1,
           color: {
-            dark: "#0b1c30",
+            dark: "#1E293B",
             light: "#ffffff",
           },
         }
@@ -449,7 +523,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           </span>
         </div>
 
-        {/* Heading & Demo Presets Row */}
+        {/* Heading */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight leading-snug font-heading">
@@ -458,33 +532,6 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             <p className="text-xs sm:text-sm text-slate-500 mt-1">
               Pilih urusan kependudukan, lengkapi identitas, dan dapatkan sertifikat validasi AI resmi.
             </p>
-          </div>
-
-          {/* Right Presets */}
-          <div className="flex flex-wrap items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200/70 self-start lg:self-center">
-            <span className="text-xs text-slate-500 pl-2 font-medium hidden sm:inline">Uji Coba:</span>
-            <button
-              type="button"
-              onClick={() => applyPreset("clean")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1 cursor-pointer ${
-                useSampleType === "clean"
-                  ? "bg-emerald-600 text-white"
-                  : "bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-              }`}
-            >
-              <span>🪄</span> Data Lengkap & Jelas
-            </button>
-            <button
-              type="button"
-              onClick={() => applyPreset("blurry")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1 cursor-pointer ${
-                useSampleType === "blurry"
-                  ? "bg-amber-600 text-white"
-                  : "bg-white border border-amber-200 text-amber-700 hover:bg-amber-50"
-              }`}
-            >
-              <span>⚠️</span> Berkas Agak Buram
-            </button>
           </div>
         </div>
 
@@ -596,19 +643,36 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <span className="material-symbols-outlined text-[14px]">lock</span>
                   End-to-End Encrypted
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    applyPreset("clean");
-                    alert("Autentikasi SSO IKD Sukses! Data profil Anda telah otomatis tersinkronisasi.");
-                  }}
-                  className="inline-flex items-center gap-1 px-3 py-1 rounded-lg border border-slate-300 hover:border-slate-400 bg-white text-slate-700 text-xs font-semibold shadow-2xs hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[15px] text-[#2563eb]">key</span>
-                  <span>Login IKD</span>
-                </button>
               </div>
             </div>
+
+            {/* Hasil pra-pemeriksaan yang terbawa (jenis dokumen + skor) */}
+            {initialPreScreenData && (initialPreScreenData.jenisDokumen || initialPreScreenData.imageBase64) && (
+              <div className="bg-violet-50 border border-violet-200 rounded-xl p-4 flex items-start gap-3">
+                <span className="material-symbols-outlined text-violet-600 text-[22px] shrink-0 mt-0.5">
+                  document_scanner
+                </span>
+                <div className="text-xs md:text-sm text-slate-700 leading-relaxed">
+                  <strong className="text-slate-900 font-semibold">
+                    Hasil pra-pemeriksaan: {jenisLabel(initialPreScreenData.jenisDokumen)}
+                    {typeof initialPreScreenData.preScreenScore === "number"
+                      ? ` (skor ${initialPreScreenData.preScreenScore}/100)`
+                      : ""}
+                  </strong>
+                  {initialPreScreenData.jenisDokumen && initialPreScreenData.jenisDokumen !== "KTP" && (
+                    <span className="block mt-0.5">
+                      Dokumen Anda terdeteksi sebagai {jenisLabel(initialPreScreenData.jenisDokumen)} — pastikan
+                      pilihan <em>Jenis Urusan</em> di bawah sesuai dengan keperluan Anda (tidak harus layanan KTP).
+                    </span>
+                  )}
+                  {(!initialPreScreenData.nik || !initialPreScreenData.nama) && (
+                    <span className="block mt-0.5 text-amber-700">
+                      Sebagian data tidak terbaca AI — lengkapi NIK/nama manual sesuai fisik dokumen.
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* OTP Alert Box */}
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
@@ -616,9 +680,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 verified_user
               </span>
               <p className="text-xs md:text-sm text-slate-700 leading-relaxed">
-                <strong className="text-slate-900 font-semibold">Verifikasi OTP Aktif</strong> — Pastikan
-                nomor WhatsApp Anda aktif. Kami akan mengirimkan kode OTP dan notifikasi status
-                pemrosesan dokumen secara real-time.
+                <strong className="text-slate-900 font-semibold">Notifikasi WhatsApp</strong> — Pastikan
+                nomor WhatsApp Anda aktif. Status tiket (disetujui/ditolak/perlu perbaikan) dikirim
+                otomatis via WhatsApp oleh petugas setelah verifikasi.
               </p>
             </div>
 
@@ -632,7 +696,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 <div className="relative flex items-center">
                   <select
                     value={selectedService}
-                    onChange={(e) => setSelectedService(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedService(e.target.value);
+                      // Syarat berkas mengikuti layanan → ulangi upload dari nol.
+                      resetAllUploads();
+                    }}
                     className="w-full h-12 pl-4 pr-10 rounded-xl bg-slate-50 border border-slate-300 text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition-all outline-none appearance-none cursor-pointer"
                   >
                     <option value="Penerbitan KTP-EL Baru / Penggantian">
@@ -781,10 +849,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h2 className="text-lg font-bold text-slate-900 leading-tight font-heading">
-                  Langkah 2: Unggah Berkas Dokumen ({selectedService})
+                  Langkah 2: Unggah Berkas Dokumen ({requiredDocs.length} berkas wajib)
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Foto dokumen asli fisik di permukaan datar dengan pencahayaan cukup.
+                  {selectedService} — unggah SEMUA berkas bertanda WAJIB sesuai syarat ketentuan.
+                  Berkas pertama adalah dokumen utama yang dipindai AI.
                 </p>
               </div>
               <span className="px-3 py-1 rounded-full bg-blue-50 text-[#2563eb] border border-blue-200 text-xs font-semibold self-start sm:self-center">
@@ -792,7 +861,50 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               </span>
             </div>
 
-            {/* Upload Area */}
+            {/* Daftar syarat wajib + progres kelengkapan */}
+            {(() => {
+              const filledSupport = supportFiles.slice(0, supportDocs.length).filter((f) => f?.base64).length;
+              const doneCount = (docImageBase64 ? 1 : 0) + filledSupport;
+              return (
+                <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-4 text-xs">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-bold text-[#0F172A] uppercase tracking-wide">
+                      Syarat Wajib {selectedService}
+                    </span>
+                    <span className={`font-bold px-2.5 py-0.5 rounded-full border ${doneCount === requiredDocs.length ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-white text-[#2563eb] border-blue-200"}`}>
+                      {doneCount}/{requiredDocs.length} berkas terunggah
+                    </span>
+                  </div>
+                  <ul className="mt-2 space-y-1.5">
+                    {requiredDocs.map((req, i) => {
+                      const filled = i === 0 ? !!docImageBase64 : !!supportFiles[i - 1]?.base64;
+                      return (
+                        <li key={i} className="flex items-start gap-2 text-slate-700">
+                          <span className={`material-symbols-outlined text-[16px] mt-0.5 shrink-0 ${filled ? "text-emerald-600" : "text-slate-400"}`}>
+                            {filled ? "check_circle" : "radio_button_unchecked"}
+                          </span>
+                          <span>
+                            <strong className={filled ? "text-emerald-800" : "text-[#0F172A]"}>{i + 1}. {req.title}</strong>
+                            <span className="ml-1.5 px-1.5 py-px rounded text-[10px] font-bold uppercase bg-red-50 text-red-700 border border-red-200">Wajib</span>
+                            {i === 0 && <span className="ml-1.5 px-1.5 py-px rounded text-[10px] font-bold uppercase bg-blue-50 text-[#2563eb] border border-blue-200">Dipindai AI</span>}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })()}
+
+            {/* Slot 1: Dokumen utama (dipindai AI) */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="w-6 h-6 rounded-full bg-[#2563eb] text-white text-[11px] font-bold flex items-center justify-center shrink-0">1</span>
+                <span className="text-sm font-bold text-[#0F172A]">{requiredDocs[0]?.title}</span>
+                <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-red-50 text-red-700 border border-red-200">Wajib</span>
+                <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-blue-50 text-[#2563eb] border border-blue-200">Dipindai AI</span>
+              </div>
+              <p className="text-[11px] text-slate-500 -mt-1">{requiredDocs[0]?.description}</p>
             <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-2xl p-6 bg-slate-50/50 hover:bg-blue-50/40 transition-colors relative">
               {docImageBase64 ? (
                 <div className="flex flex-col items-center gap-3 w-full">
@@ -827,7 +939,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <div className="w-14 h-14 rounded-full bg-blue-100 text-[#2563eb] flex items-center justify-center mb-3 shadow-xs">
                     <span className="material-symbols-outlined text-[28px]">cloud_upload</span>
                   </div>
-                  <span className="text-sm font-bold text-slate-800">
+                  <span className="text-sm font-bold text-[#0F172A]">
                     Klik untuk Pilih Foto Dokumen atau Seret File ke Sini
                   </span>
                   <span className="text-xs text-slate-500 mt-1">
@@ -842,29 +954,49 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 </label>
               )}
             </div>
-
-            {/* Quick Sample Selector for User Testing */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-              <span className="text-slate-600 font-medium">
-                Belum punya foto KTP saat ini? Coba gunakan sampel dokumen uji coba:
-              </span>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => applyPreset("clean")}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-semibold shadow-2xs cursor-pointer"
-                >
-                  Gunakan Contoh e-KTP Valid
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyPreset("blurry")}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 hover:bg-amber-50 text-amber-800 font-semibold shadow-2xs cursor-pointer"
-                >
-                  Gunakan Contoh Foto Buram
-                </button>
-              </div>
             </div>
+
+            {/* Slot 2..N: berkas pendukung WAJIB (dilampirkan, diverifikasi manual di loket) */}
+            {supportDocs.map((req, i) => {
+              const f = supportFiles[i];
+              const filled = !!f?.base64;
+              return (
+                <div key={`${selectedService}-${i}`} className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="w-6 h-6 rounded-full bg-slate-700 text-white text-[11px] font-bold flex items-center justify-center shrink-0">{i + 2}</span>
+                    <span className="text-sm font-bold text-[#0F172A]">{req.title}</span>
+                    <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-red-50 text-red-700 border border-red-200">Wajib</span>
+                    <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600 border border-slate-200">Lampiran</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 -mt-1">{req.description}</p>
+                  {filled ? (
+                    <div className="flex items-center gap-3 border border-emerald-200 bg-emerald-50/50 rounded-2xl p-3">
+                      <img src={f.base64} alt={req.title} className="w-16 h-12 object-cover rounded-lg border border-slate-200 bg-white shrink-0" />
+                      <span className="text-xs font-semibold text-[#0F172A] truncate flex-1">{f.name}</span>
+                      <span className="text-xs text-emerald-700 font-semibold hidden sm:inline">Terunggah</span>
+                      <label className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-[#0F172A] text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
+                        Ganti
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
+                      </label>
+                      <button type="button" onClick={() => removeSupportFile(i)} className="px-3 py-1.5 rounded-lg bg-white border border-red-200 hover:bg-red-50 text-red-700 text-xs font-semibold cursor-pointer shrink-0">
+                        Hapus
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 bg-slate-50/50 hover:bg-blue-50/40 transition-colors cursor-pointer">
+                      <span className="w-10 h-10 rounded-full bg-blue-100 text-[#2563eb] flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[22px]">cloud_upload</span>
+                      </span>
+                      <span>
+                        <span className="block text-xs font-bold text-[#0F172A]">Klik untuk unggah {req.title}</span>
+                        <span className="block text-[11px] text-slate-500 mt-0.5">Format: JPG, PNG, WEBP (Maksimal 10MB)</span>
+                      </span>
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
+                    </label>
+                  )}
+                </div>
+              );
+            })}
 
             {/* UU PDP Compliance Notice */}
             <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl p-4 flex items-start gap-3 text-xs text-emerald-900 leading-relaxed">
@@ -872,10 +1004,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 security
               </span>
               <div>
-                <strong>Jaminan Kepatuhan UU No. 27/2022 (UU PDP):</strong> Seluruh foto fisik yang Anda
-                unggah hanya diproses sementara di RAM backend untuk ekstraksi data OCR kependudukan,
-                kemudian langsung dihapus otomatis (auto-purge). Foto tidak pernah disimpan di disk atau
-                server penyimpanan awan.
+                <strong>Jaminan Kepatuhan UU No. 27/2022 (UU PDP):</strong> Foto yang Anda
+                unggah disimpan sementara terenkripsi dan hanya terlihat petugas serta Anda sendiri,
+                lalu dihapus otomatis (purge) seketika tiket disetujui/ditolak. Yang tercatat permanen
+                hanya jenis dokumen (KTP/KK/AKTA) untuk rekap.
               </div>
             </div>
 
@@ -951,6 +1083,13 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     verificationResult.jenis_dokumen === "LAINNYA" ||
                     /bukan kartu kependudukan/i.test(verificationResult.catatan || "");
                   const lulus = verificationResult.status_kualitas === "LULUS" && !bukanKtp;
+                  // Gangguan sistem (AI/kunci/coneksi) bukan vonis dokumen — tampil abu-abu.
+                  const sysErr =
+                    !lulus &&
+                    !bukanKtp &&
+                    /gagal menghubungi|koneksi|jaringan|gangguan sistem|sedang gangguan|kunci akses|sedang sibuk|petugas loket/i.test(
+                      verificationResult.catatan || ""
+                    );
                   return (
                 <div
                   className={`p-5 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
@@ -958,7 +1097,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       ? "bg-emerald-50/80 border-emerald-200 text-emerald-950"
                       : bukanKtp
                         ? "bg-red-50/80 border-red-200 text-red-950"
-                        : "bg-amber-50/80 border-amber-200 text-amber-950"
+                        : sysErr
+                          ? "bg-slate-100 border-slate-300 text-[#0F172A]"
+                          : "bg-amber-50/80 border-amber-200 text-amber-950"
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -967,8 +1108,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                         lulus
                           ? "bg-emerald-600 text-white"
                           : bukanKtp
-                            ? "bg-red-600 text-white"
-                            : "bg-amber-600 text-white"
+                            ? "bg-red-500 text-white"
+                            : sysErr
+                              ? "bg-slate-500 text-white"
+                              : "bg-amber-500 text-white"
                       }`}
                     >
                       <span className="material-symbols-outlined text-[28px]">
@@ -982,7 +1125,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                             ? "Dokumen Lulus Pre-Screening (Jalur Fast-Track Siap)"
                             : bukanKtp
                               ? "File Bukan Kartu Kependudukan Indonesia"
-                              : "Dokumen Memerlukan Perbaikan"}
+                              : sysErr
+                                ? "Gangguan Sistem — Coba Lagi"
+                                : "Dokumen Memerlukan Perbaikan"}
                         </h3>
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
@@ -1007,7 +1152,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     </span>
                     <span
                       className={`font-code-num text-2xl font-extrabold ${
-                        verificationResult.skor >= 75 ? "text-emerald-600" : bukanKtp ? "text-red-600" : "text-amber-600"
+                        verificationResult.skor >= 75 ? "text-emerald-600" : bukanKtp ? "text-red-500" : "text-amber-500"
                       }`}
                     >
                       {verificationResult.skor}%
@@ -1015,6 +1160,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     <span className="text-[10px] text-slate-500 font-medium">
                       {verificationResult.skor >= 75 ? "≥ 75% Fast-Track" : "< 75% Butuh Revisi"}
                     </span>
+                    {scanPhoneSaved !== null && (
+                      <span className={`text-[10px] font-semibold mt-1 ${scanPhoneSaved ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {scanPhoneSaved ? 'Nomor WA tersimpan ✓' : 'Nomor WA tak tersimpan'}
+                      </span>
+                    )}
                   </div>
                 </div>
                   );
@@ -1031,7 +1181,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <div className="divide-y divide-slate-100 text-xs">
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Nomor Induk Kependudukan (NIK)</span>
-                      <span className="font-code-num font-semibold text-slate-800">{verificationResult.nik}</span>
+                      <span className="font-code-num font-semibold text-[#0F172A]">{verificationResult.nik}</span>
                       <span className="text-emerald-600 font-semibold flex items-center gap-1">
                         <span className="material-symbols-outlined text-[15px]">check_circle</span>
                         <span>16 Digit Valid & Cocok</span>
@@ -1040,7 +1190,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Nama Pemohon</span>
-                      <span className="font-semibold text-slate-800">{verificationResult.nama}</span>
+                      <span className="font-semibold text-[#0F172A]">{verificationResult.nama}</span>
                       <span className="text-emerald-600 font-semibold flex items-center gap-1">
                         <span className="material-symbols-outlined text-[15px]">check_circle</span>
                         <span>Sesuai Identitas</span>
@@ -1049,7 +1199,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Jenis Urusan / Berkas</span>
-                      <span className="text-slate-800">
+                      <span className="text-[#0F172A]">
                         {verificationResult.jenis_dokumen}
                         <span className="text-slate-400"> • {selectedService}</span>
                       </span>
@@ -1058,7 +1208,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                           verificationResult.jenis_dokumen === "KTP"
                             ? "text-blue-600"
                             : verificationResult.jenis_dokumen === "LAINNYA"
-                              ? "text-red-600"
+                              ? "text-red-500"
                               : "text-blue-600"
                         }`}
                       >
@@ -1128,7 +1278,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       <span className="material-symbols-outlined text-[18px]">qr_code_2</span>
                     </button>
                     {terblokir && (
-                      <span className="text-[11px] text-red-600 text-center sm:text-right">
+                      <span className="text-[11px] text-red-500 text-center sm:text-right">
                         {networkBawah
                           ? "Gagal menghubungi server OCR — periksa koneksi lalu ulangi pindaian."
                           : "File bukan Kartu Kependudukan Indonesia — unggah ulang e-KTP asli."}
@@ -1152,11 +1302,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <div className="flex items-center justify-between border-b border-white/20 pb-4 mb-4">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-white p-1 flex items-center justify-center">
-                    <img
-                      alt="Logo"
-                      className="w-full h-full object-contain"
-                      src="https://lh3.googleusercontent.com/aida-public/AB6AXuAkx2fV6S4Ms-L4kxHNCVvvIRx4MeEXrkJR5xqFb6-DQLH5wnlvKGTiqJTL-G6HNFllKunC_QPb-UrtzZz09AXex_PzfhVcW__hsAHHlrCY8VvkRdrkivvRCuPqPNM7SGBD5RX09SmUtwCZZraWx5RwwjmsBe_sMq0mZvRe48ILTvh62fhMP9zoIfsFa1V-vmttXb_yCGi0yqSvj-GPeCN5P_cvIal9hkPg7f0IFMhHYho-9Y4_J_sOwh8hHZwSpX3Wivg"
-                    />
+                    <AipexLogo className="w-full h-full" size={24} />
                   </div>
                   <div>
                     <h3 className="text-sm font-bold tracking-wide leading-none">AIPEX VERIBOT</h3>
@@ -1216,6 +1362,13 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 Simpan atau cetak tiket ini. Tunjukkan ke verifikator loket untuk langsung dipanggil tanpa
                 mengisi formulir kertas lagi.
               </p>
+              {phoneSaved !== null && (
+                <p className={`text-[11px] text-center leading-tight ${phoneSaved ? 'text-emerald-300' : 'text-amber-300'}`}>
+                  {phoneSaved
+                    ? 'Nomor WA tersimpan — petugas bisa kirim notifikasi otomatis.'
+                    : 'Nomor WA tidak tersimpan (kolom DB belum ada) — petugas akan mengetik manual.'}
+                </p>
+              )}
             </div>
 
             {/* Action Buttons */}
@@ -1223,7 +1376,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-[#0F172A] text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">print</span>
                 <span>Cetak Tiket PDF</span>
@@ -1239,6 +1392,17 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               >
                 <span className="material-symbols-outlined text-[18px]">share</span>
                 <span>Kirim ke WhatsApp</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  downloadTicketQrPng(generatedTicket).catch(() => alert('Gagal mengunduh QR PNG.'));
+                }}
+                className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px]">download</span>
+                <span>Unduh QR PNG</span>
               </button>
 
               <button

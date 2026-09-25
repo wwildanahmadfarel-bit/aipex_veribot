@@ -71,6 +71,8 @@ export interface OcrPreScreenResult {
   jenis_dokumen?: "KTP" | "KK" | "AKTA" | "LAINNYA" | string;
   status_verifikasi?: "BERHASIL" | "BURAM" | "TIDAK_VALID" | string;
   isSystemError?: boolean;
+  /** True bila hasil berasal dari penilaian offline lokal (AI gangguan) — bukan vonis AI. */
+  isOfflineDemo?: boolean;
 }
 
 export interface PreScreenInitialData {
@@ -80,5 +82,7 @@ export interface PreScreenInitialData {
   imageName?: string;
   service?: string;
   preScreenScore?: number;
+  /** Jenis dokumen hasil pra-pemeriksaan: KTP | KK | AKTA */
+  jenisDokumen?: string;
 }
 

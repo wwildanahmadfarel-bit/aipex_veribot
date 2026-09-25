@@ -17,6 +17,21 @@ import {
   type TicketRow,
 } from "./store";
 import { parseMultipartBuffer, readJsonBody, readRawBody } from "./http";
+import { classifyAiFailure } from "./ai-errors";
+import {
+  checkOcrRateLimit,
+  getClientIp,
+  hashIp,
+  isTurnstileVerified,
+  markTurnstileVerified,
+  ocrLimits,
+  peekOcrWindowCount,
+  rateLimitHeaders,
+} from "./rate-limit";
+import { isTurnstileConfigured, verifyTurnstile } from "./turnstile";
+import { sha256Hex, validateUploadBuffer } from "./file-guard";
+import { getCachedOcr, setCachedOcr } from "./ocr-cache";
+import { logOcrAttempt } from "./abuse-log";
 
 const OCR_SYSTEM = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga / KK, dan Akta Kelahiran).
 
@@ -96,11 +111,97 @@ export async function handleOcr(req: any, res: any) {
     }
     if (fileBytes && fileBytes.length === 0) fileBytes = null;
 
-    // Batasi ukuran untuk limit Serverless Vercel (~4.5MB payload)
-    if (fileBytes && fileBytes.length > 4_200_000) {
-      return res.status(413).json({
+    const ocrStart = Date.now();
+    // Salinan foto untuk arsip sementara terenkripsi (diisi setelah AI selesai).
+    let fotoCopy: Buffer | null = null;
+    const clientIp = getClientIp(req);    const ipHash = hashIp(clientIp, req?.headers?.["user-agent"]);
+    const limits = ocrLimits();
+
+    // --- Anti-spam L1: honeypot + dwell-time (tanpa AI) ---------------------
+    const honeypot =
+      bodyFields?.website_confirm ?? bodyFields?.honeypot ?? (req.body && (req.body as any).website_confirm);
+    const startedAtRaw = bodyFields?.startedAt ?? (req.body && (req.body as any).startedAt);
+    const startedAt = Number(startedAtRaw);
+    if (typeof honeypot === "string" && honeypot.trim()) {
+      await logOcrAttempt({ ipHash, fileHash: "", mime: mimeType, sizeBytes: fileBytes?.length ?? 0, status: "BOT_HONEYPOT", source: "blocked:honeypot", latencyMs: Date.now() - ocrStart });
+      return res.status(400).json({
         success: false,
-        message: "Ukuran file melebihi 4MB (batas Vercel). Kompres/ambil ulang foto di bawah 4MB lalu coba lagi.",
+        code: "BOT_DETECTED",
+        message: "Terdeteksi aktivitas otomatis. Muat ulang halaman lalu unggah foto e-KTP asli.",
+      });
+    }
+    if (Number.isFinite(startedAt) && startedAt > 0 && Date.now() - startedAt < 3000) {
+      await logOcrAttempt({ ipHash, fileHash: "", mime: mimeType, sizeBytes: fileBytes?.length ?? 0, status: "BOT_FAST", source: "blocked:dwell", latencyMs: Date.now() - ocrStart });
+      return res.status(400).json({
+        success: false,
+        code: "BOT_DETECTED",
+        message: "Terlalu cepat mengirim berkas. Tunggu sejenak lalu unggah ulang foto e-KTP asli.",
+      });
+    }
+
+    // --- Anti-spam L2: captcha adaptif (scan terakhir wajib token manusia) ------
+    // Peek dulu agar 403 captcha TIDAK memakan kuota.
+    const turnstileToken =
+      bodyFields?.turnstileToken ?? (req.body && (req.body as any).turnstileToken) ?? null;
+    let turnstileOk = await isTurnstileVerified(ipHash);
+    if (!turnstileOk && isTurnstileConfigured()) {
+      const used = await peekOcrWindowCount(ipHash);
+      if (used >= limits.per10Min - 1) {
+        const v = await verifyTurnstile(turnstileToken, clientIp);
+        if (!v.ok) {
+          await logOcrAttempt({ ipHash, fileHash: "", mime: mimeType, sizeBytes: fileBytes?.length ?? 0, status: "CAPTCHA_REQUIRED", source: "blocked:captcha", latencyMs: Date.now() - ocrStart });
+          return res.status(403).json({
+            success: false,
+            code: "CAPTCHA_REQUIRED",
+            captchaRequired: true,
+            message: "Verifikasi manusia diperlukan untuk pemindaian terakhir. Selesaikan captcha lalu coba lagi (kuota Anda tidak berkurang).",
+          });
+        }
+        turnstileOk = true;
+        await markTurnstileVerified(ipHash);
+      } else if (typeof turnstileToken === "string" && turnstileToken.trim()) {
+        // Token sukarela di percobaan awal: verifikasi & tandai agar percobaan terakhir mulus.
+        const v = await verifyTurnstile(turnstileToken, clientIp);
+        if (v.ok) {
+          turnstileOk = true;
+          await markTurnstileVerified(ipHash);
+        }
+      }
+    }
+
+    // --- Anti-spam L3: rate-limit (20x/10 mnt/IP, 20x/hari/IP, 300x/hari, via ocrLimits()) ----
+    const rl = await checkOcrRateLimit(req);
+    for (const [k, v] of Object.entries(rateLimitHeaders(rl.remaining10, rl.retryAfterSec))) {
+      try { res.setHeader(k, v); } catch {}
+    }
+    if (!rl.allowed) {
+      const msg =
+        rl.code === "GLOBAL_LIMIT"
+          ? "Layanan sedang padat (kuota harian tercapai). Coba lagi besok atau hubungi petugas loket."
+          : rl.code === "DAY_LIMIT"
+            ? `Kuota harian Anda habis (${limits.perDayIp}x/hari). AI belum memeriksa berkas ini — bukan salah foto Anda. Coba lagi besok atau hubungi petugas loket / lanjut isi manual.`
+            : `Terlalu sering memindai. Sisa kuota 0/${limits.per10Min} per 10 menit. AI belum memeriksa berkas ini — bukan salah foto Anda.`;
+      await logOcrAttempt({ ipHash, fileHash: "", mime: mimeType, sizeBytes: fileBytes?.length ?? 0, status: rl.code, source: "blocked:rate", latencyMs: Date.now() - ocrStart });
+      return res.status(429).json({
+        success: false,
+        code: "RATE_LIMITED",
+        limitCode: rl.code,
+        isSystemError: true,
+        message: msg,
+        retryAfter: rl.retryAfterSec,
+        remaining: 0,
+        limit: limits.per10Min,
+      });
+    }
+
+    // --- Anti-spam L4: validasi file murah (magic-bytes, ukuran, dimensi) ---
+    const guard = validateUploadBuffer(fileBytes, mimeType);
+    if (!guard.ok) {
+      await logOcrAttempt({ ipHash, fileHash: "", mime: mimeType, sizeBytes: fileBytes?.length ?? 0, status: "INVALID_FILE", source: `blocked:${guard.reason}`, latencyMs: Date.now() - ocrStart });
+      return res.status(guard.reason === "too-large" ? 413 : 400).json({
+        success: false,
+        code: "INVALID_FILE",
+        message: guard.message,
         data: {
           nik: null,
           nama: null,
@@ -108,10 +209,16 @@ export async function handleOcr(req: any, res: any) {
           skor_kejelasan: 0,
           status_verifikasi: "TIDAK_VALID",
           status_kualitas: "TIDAK_LAYAK",
-          catatan: "Ukuran file melebihi 4MB. Kompres foto lalu unggah ulang.",
+          catatan: guard.message,
         },
       });
     }
+
+    // --- Anti-spam L5: dedup hash (file sama = tanpa AI) --------------------
+    const fileHash = sha256Hex(fileBytes as Buffer);
+    let parsed: any = await getCachedOcr(fileHash);
+    const cacheHit = Boolean(parsed);
+    let aiSource = cacheHit ? "cache" : "";
 
     if (!fileBytes) {
       return res.status(400).json({
@@ -129,6 +236,10 @@ export async function handleOcr(req: any, res: any) {
       });
     }
 
+    // Lewati AI bila cache hit (fileHash sudah pernah diproses <24 jam).
+    const skipAi = cacheHit && parsed && typeof parsed === "object";
+    if (skipAi) aiSource = "cache";
+
     const naraApiKey = extractNaraApiKey({ ...req, body: bodyFields });
     const naraConfigured = isNaraConfigured(naraApiKey);
     const client: GoogleGenAI | null = getGeminiClient();
@@ -138,21 +249,8 @@ export async function handleOcr(req: any, res: any) {
     let lastAiError = "";
     const isPdf = /pdf/i.test(mimeType || "");
 
-    if (naraConfigured && !responseText && !isPdf) {
-      try {
-        responseText = await visionViaNaraRoute({
-          apiKey: naraApiKey,
-          model: (bodyFields?.naraModel as string) || process.env.NARA_ROUTE_MODEL || undefined,
-          systemPrompt: OCR_SYSTEM,
-          userPrompt: OCR_USER_PROMPT,
-          imageBase64: fileBytes.toString("base64"),
-          mimeType,
-        });
-      } catch (naraErr: any) {
-        lastAiError = `nara-route: ${naraErr?.message || naraErr}`;
-      }
-    }
-
+    if (!skipAi) {
+    // Prioritas 1: Gemini (utama — mendukung gambar + PDF).
     if (!responseText && client) {
       for (const modelName of ocrModels) {
         try {
@@ -182,6 +280,7 @@ export async function handleOcr(req: any, res: any) {
           });
           if (response && (response as any).text) {
             responseText = (response as any).text;
+            aiSource = "gemini";
             break;
           }
         } catch (modelErr: any) {
@@ -190,39 +289,67 @@ export async function handleOcr(req: any, res: any) {
       }
     }
 
-    if (!responseText && !client && !naraConfigured) {
+    // Prioritas 2 (cadangan): nara-route — hanya image (PDF dilewati).
+    if (!responseText && naraConfigured && !isPdf) {
+      try {
+        responseText = await visionViaNaraRoute({
+          apiKey: naraApiKey,
+          model: (bodyFields?.naraModel as string) || process.env.NARA_ROUTE_MODEL || undefined,
+          systemPrompt: OCR_SYSTEM,
+          userPrompt: OCR_USER_PROMPT,
+          imageBase64: fileBytes.toString("base64"),
+          mimeType,
+        });
+        if (responseText) aiSource = "nara-route";
+      } catch (naraErr: any) {
+        lastAiError = `nara-route: ${naraErr?.message || naraErr}`;
+      }
+    }
+    } // end if (!skipAi)
+
+    if (!skipAi && !responseText && !client && !naraConfigured) {
       return res.status(503).json({
         success: false,
         isSystemError: true,
-        message: "Layanan AI OCR belum dikonfigurasi (GEMINI_API_KEY / NARA_ROUTE_API_KEY kosong). Tidak dapat memverifikasi dokumen.",
+        message: "Layanan AI OCR belum dikonfigurasi (GEMINI_API_KEY / NARA_ROUTE_API_KEY kosong). Bukan salah foto Anda — lanjut isi formulir manual atau hubungi petugas untuk verifikasi manual.",
         data: {
           nik: null, nama: null, jenis_dokumen: "LAINNYA", skor_kejelasan: 0,
           status_verifikasi: "TIDAK_VALID", status_kualitas: "TIDAK_LAYAK",
           isSystemError: true,
-          catatan: "Layanan AI belum dikonfigurasi. Hubungi petugas untuk verifikasi manual.",
+          catatan: "Layanan AI belum dikonfigurasi (gangguan sistem). Bukan salah foto Anda — lanjut isi manual atau hubungi petugas untuk verifikasi manual.",
         },
       });
     }
 
-    if (!responseText) {
-      const detail = lastAiError ? ` Detail: ${lastAiError}`.slice(0, 500) : "";
+    if (!skipAi && !responseText) {
+      // JANGAN kirim detail mentah provider ke user (bocor + membingungkan).
+      const aiFail = classifyAiFailure(lastAiError);
       return res.status(502).json({
         success: false,
         isSystemError: true,
-        message: `Layanan AI gagal memproses foto.${detail} Silakan foto ulang lebih jelas atau coba lagi sesaat.`,
+        code: aiFail.code,
+        subcode: aiFail.subcode,
+        provider: aiFail.provider,
+        retryable: aiFail.retryable,
+        retryAfter: aiFail.retryAfterSec,
+        message: aiFail.message,
         data: {
           nik: null, nama: null, jenis_dokumen: "LAINNYA", skor_kejelasan: 0,
           status_verifikasi: "TIDAK_VALID", status_kualitas: "TIDAK_LAYAK",
           isSystemError: true,
-          catatan: "Layanan AI gagal memproses foto. Coba lagi dengan foto lebih jelas.",
+          catatan: aiFail.message,
         },
       });
     }
 
-    let parsed: any;
+    if (!skipAi) {
     try {
       parsed = parseAiJsonResponse(responseText);
     } catch {
+      // Buffer foto dinol-kan sebelum keluar (UU PDP: minimalkan sisa data di RAM).
+      try {
+        if (fileBytes) fileBytes.fill(0);
+      } catch {}
       return res.status(502).json({
         success: false,
         isSystemError: true,
@@ -234,6 +361,18 @@ export async function handleOcr(req: any, res: any) {
           catatan: "AI mengembalikan jawaban tak valid. Silakan ulangi pindaian.",
         },
       });
+    }
+    // Foto sudah selesai dipakai AI: salin untuk arsip sementara terenkripsi,
+    // lalu nol-kan buffer asli (panjang tak berubah, aman untuk log size).
+    fotoCopy = null;
+    try {
+      if (fileBytes) fotoCopy = Buffer.from(fileBytes);
+    } catch {}
+    try {
+      if (fileBytes) fileBytes.fill(0);
+    } catch {}
+    // Jejak sumber AI untuk logging (gemini utama, nara cadangan) — bukan rahasia.
+    if (!skipAi && !aiSource) aiSource = client ? "gemini" : naraConfigured ? "nara-route" : "ai";
     }
 
     parsed.jenis_dokumen = normalizeJenisDokumen(parsed.jenis_dokumen);
@@ -290,7 +429,15 @@ export async function handleOcr(req: any, res: any) {
     }
     parsed.status_kualitas = isBerhasil ? "LAYAK" : "TIDAK_LAYAK";
 
+    // Simpan hasil AI ke cache agar file sama tidak memakan token lagi.
+    // (Hanya saat hasil berasal dari AI fresh, bukan dari cache itu sendiri.)
+    if (!skipAi) {
+      if (!parsed._cacheHit) await setCachedOcr(fileHash, parsed);
+      if (parsed.status_verifikasi === "TIDAK_VALID") aiSource = aiSource || "ai";
+    }
+
     if (isTidakValid) {
+      await logOcrAttempt({ ipHash, fileHash, mime: mimeType, sizeBytes: fileBytes.length, skor: parsed.skor_kejelasan ?? null, status: "TIDAK_VALID", source: aiSource || "ai", latencyMs: Date.now() - ocrStart });
       return res.json({ success: false, message: BUKAN_KTP_MESSAGE, data: parsed, ...parsed });
     }
 
@@ -313,7 +460,15 @@ export async function handleOcr(req: any, res: any) {
         : "Dokumen kependudukan asli terdeteksi namun buram. QR tetap terbit — bawa fisik dokumen asli untuk verifikasi ulang di loket.");
     parsed.catatan = finalCatatan;
 
-    const dbPayload = {
+    // Nomor WA dikirim wizard sejak langkah 1 (opsional; alur tanpa formulir tak punya).
+    const scanPhone =
+      typeof bodyFields?.phone === "string" && bodyFields.phone.trim()
+        ? bodyFields.phone.trim()
+        : typeof bodyFields?.no_hp === "string" && bodyFields.no_hp.trim()
+          ? bodyFields.no_hp.trim()
+          : "";
+
+    const dbPayload: any = {
       kode_tiket: kodeTiket,
       nik: parsed.nik || "0000000000000000",
       nama: parsed.nama || "Tidak Terdeteksi",
@@ -322,13 +477,42 @@ export async function handleOcr(req: any, res: any) {
       status_verifikasi: finalStatus,
       catatan: finalCatatan,
     };
+    if (scanPhone) dbPayload.phone = scanPhone;
 
     let ticketData: any = dbPayload;
+    let phoneSaved = false;
     const supabase = getSupabase();
     if (supabase) {
       try {
-        const { data, error } = await supabase.from("tickets").insert([dbPayload]).select();
-        if (!error && data && data.length > 0) ticketData = data[0];
+        let ins = await supabase.from("tickets").insert([dbPayload]).select();
+        // Fallback bila kolom phone belum dimigrasi di database.
+        if (ins.error && scanPhone && /phone/i.test(String(ins.error.message || ""))) {
+          try {
+            console.warn(`[ocr] kolom phone belum ada, nomor ${kodeTiket} tidak persist. Jalankan migrasi 20260928_tiket_phone.sql.`);
+          } catch {}
+          delete dbPayload.phone;
+          ins = await supabase.from("tickets").insert([dbPayload]).select();
+        }
+        if (!ins.error && ins.data && ins.data.length > 0) {
+          ticketData = ins.data[0];
+          if (scanPhone && (ticketData as any).phone) phoneSaved = true;
+        }
+        // Sembuhkan baris lama NIK sama yang belum punya nomor — best-effort.
+        if (scanPhone && parsed.nik) {
+          try {
+            await supabase
+              .from("tickets")
+              .update({ phone: scanPhone })
+              .eq("nik", String(parsed.nik).replace(/\D/g, ""))
+              .is("phone", null)
+              .neq("kode_tiket", kodeTiket);
+          } catch {}
+          try {
+            for (const t of memTickets) {
+              if ((t as any).nik_raw === parsed.nik && !(t as any).phone) (t as any).phone = scanPhone;
+            }
+          } catch {}
+        }
       } catch {}
     }
 
@@ -339,6 +523,7 @@ export async function handleOcr(req: any, res: any) {
       nik_encrypted: maskedNik === "320101******0000" && parsed.nik ? `${parsed.nik.slice(0, 6)}******${parsed.nik.slice(-4)}` : maskedNik,
       nik_raw: parsed.nik || undefined,
       nama_warga: parsed.nama || "Warga",
+      phone: scanPhone || "",
       jenis_dokumen: parsed.jenis_dokumen || "LAINNYA",
       status_verifikasi: isBerhasil ? "APPROVED" : "REVISI",
       skor_ai: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 90,
@@ -348,6 +533,36 @@ export async function handleOcr(req: any, res: any) {
       updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
     };
     memTickets.unshift(inMemTicket);
+    // Sembuhkan memori: baris NIK sama yang belum punya nomor ikut terisi.
+    if (scanPhone && parsed.nik) {
+      try {
+        for (const t of memTickets) {
+          if ((t as any).nik_raw === parsed.nik && !(t as any).phone) (t as any).phone = scanPhone;
+        }
+      } catch {}
+    }
+
+    // Arsip sementara foto terenkripsi (best-effort): petugas + warga pemilik
+    // bisa lihat sampai tiket diputus; tiket tetap valid bila arsip gagal.
+    if (fotoCopy && supabase) {
+      try {
+        const { simpanFotoTiket } = await import("./tiket-foto");
+        const saved = await simpanFotoTiket(kodeTiket, fotoCopy, mimeType);
+        if (saved.ok && saved.path) {
+          inMemTicket.foto_path = saved.path;
+          try {
+            await supabase
+              .from("tickets")
+              .update({ foto_path: saved.path, foto_iv: saved.ivHex })
+              .or(`kode_tiket.eq.${kodeTiket},id.eq.${(ticketData as any).id || ""}`);
+          } catch {}
+        }
+      } catch {}
+      try {
+        fotoCopy.fill(0);
+      } catch {}
+      fotoCopy = null;
+    }
 
     const completeTicketResponse = {
       ...ticketData,
@@ -360,19 +575,30 @@ export async function handleOcr(req: any, res: any) {
       catatan: finalCatatan,
     };
 
+    await logOcrAttempt({ ipHash, fileHash, mime: mimeType, sizeBytes: fileBytes.length, skor: parsed.skor_kejelasan ?? null, status: finalStatus, source: aiSource || "ai", latencyMs: Date.now() - ocrStart });
+    try {
+      res.setHeader("X-Ocr-Source", aiSource || "ai");
+      res.setHeader("X-RateLimit-Remaining", String(rl.remaining10));
+    } catch {}
     return res.json({
       success: true,
       message: finalCatatan,
       needsRephoto: !isBerhasil,
+      source: aiSource || "ai",
+      phoneSaved,
       data: { ...parsed, ticket: completeTicketResponse },
       ticket: completeTicketResponse,
       ...parsed,
     });
   } catch (error: any) {
+    try {
+      console.error(`[OCR] tak terduga (server-only): ${String(error?.message || error).slice(0, 400)}`);
+    } catch {}
     return res.status(500).json({
       success: false,
       isSystemError: true,
-      message: error?.message || "Gagal memindai dokumen.",
+      code: "OCR_SYSTEM_ERROR",
+      message: "Terjadi gangguan sistem saat memindai. Coba lagi sesaat atau hubungi petugas untuk verifikasi manual.",
       data: {
         nik: null, nama: null, jenis_dokumen: "LAINNYA", skor_kejelasan: 0,
         status_verifikasi: "TIDAK_VALID", status_kualitas: "TIDAK_LAYAK",

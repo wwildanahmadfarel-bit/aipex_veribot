@@ -1,4 +1,5 @@
 import { readJsonBody, setCors } from "./_lib/http";
+import { checkSimpleRateLimit, TICKET_HOUR } from "./_lib/rate-limit";
 import {
   BUKAN_KTP_MESSAGE,
   getSupabase,
@@ -34,6 +35,16 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === "POST") {
     try {
+      // Anti-spam: cegah banjir tiket (5x/jam/IP).
+      const tktRl = await checkSimpleRateLimit(req, TICKET_HOUR);
+      if (!tktRl.allowed) {
+        return res.status(429).json({
+          success: false,
+          code: "RATE_LIMITED",
+          message: `Terlalu sering menerbitkan tiket. Coba lagi dalam ${Math.ceil(tktRl.retryAfterSec / 60)} menit.`,
+          retryAfter: tktRl.retryAfterSec,
+        });
+      }
       const body = await readJsonBody(req);
       const {
         nik,
@@ -121,20 +132,54 @@ export default async function handler(req: any, res: any) {
         updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
       };
       memTickets.unshift(newTicket);
+      // Sembuhkan memori: baris NIK sama yang belum punya nomor ikut terisi.
+      if (phone) {
+        try {
+          for (const t of memTickets) {
+            const sameNik = (t as any).nik_raw === nikDigits;
+            if (sameNik && !(t as any).phone) (t as any).phone = String(phone);
+          }
+        } catch {}
+      }
 
+      // Bukti simpan nomor: true bila ikut terkirim ke DB (false = kolom belum ada / DB mati).
+      let phoneSaved = false;
       if (supabase) {
         try {
-          await supabase.from("tickets").insert([
-            {
-              kode_tiket: ticketCode,
-              nik: nikDigits,
-              nama: nama_warga,
-              jenis_dokumen: jenis_dokumen || "KTP",
-              skor_kejelasan: Number(skor_ai) || 88,
-              status_verifikasi: scanStatus === "BURAM" ? "BURAM" : "BERHASIL",
-              catatan: awalCatatan,
-            },
-          ]);
+          const row: any = {
+            kode_tiket: ticketCode,
+            nik: nikDigits,
+            nama: nama_warga,
+            jenis_dokumen: jenis_dokumen || "KTP",
+            skor_kejelasan: Number(skor_ai) || 88,
+            status_verifikasi: scanStatus === "BURAM" ? "BURAM" : "BERHASIL",
+            catatan: awalCatatan,
+          };
+          if (phone) row.phone = String(phone);
+          let ins = await supabase.from("tickets").insert([row]);
+          // Fallback bila kolom phone belum dimigrasi di database.
+          if (ins.error && /phone/i.test(String(ins.error.message || ""))) {
+            try {
+              console.warn(`[tickets POST] kolom phone belum ada, nomor ${ticketCode} tidak persist. Jalankan migrasi 20260928_tiket_phone.sql.`);
+            } catch {}
+            delete row.phone;
+            ins = await supabase.from("tickets").insert([row]);
+          }
+          if (ins.error) {
+            console.warn("Supabase insert warning for new ticket:", ins.error);
+          } else if (phone) {
+            phoneSaved = true;
+            // Sembuhkan baris lama NIK sama yang belum punya nomor (mis. tiket
+            // hasil pindai sebelum nomor dikirim) — best-effort.
+            try {
+              await supabase
+                .from("tickets")
+                .update({ phone: String(phone) })
+                .eq("nik", nikDigits)
+                .is("phone", null)
+                .neq("kode_tiket", ticketCode);
+            } catch {}
+          }
         } catch (dbErr) {
           console.warn("Supabase insert warning for new ticket:", dbErr);
         }
@@ -144,7 +189,10 @@ export default async function handler(req: any, res: any) {
         success: true,
         data: newTicket,
         ticket: newTicket,
-        message: "Tiket Fast-Track berhasil diterbitkan.",
+        phoneSaved,
+        message: phoneSaved
+          ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA tersimpan."
+          : "Tiket Fast-Track berhasil diterbitkan.",
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });

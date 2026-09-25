@@ -10,6 +10,10 @@
   "functions": {
     "api/scan-document.ts": { "maxDuration": 60, "memory": 1024 },
     "api/ocr.ts": { "maxDuration": 60, "memory": 1024 },
-    "api/chat-faq.ts": { "maxDuration": 30 }
-  }
+    "api/chat-faq.ts": { "maxDuration": 30 },
+    "api/admin/tickets.ts": { "maxDuration": 30 }
+  },
+  "crons": [
+    { "path": "/api/cron/purge-tiket-foto", "schedule": "0 2 * * *" }
+  ]
 }

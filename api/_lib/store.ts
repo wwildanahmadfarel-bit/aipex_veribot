@@ -154,6 +154,8 @@ export interface TicketRow {
   status_ai: "LULUS" | "GAGAL";
   catatan_ai: string;
   catatan_petugas?: string;
+  /** Path foto sementara terenkripsi di Storage privat (null bila tak tersimpan/sudah purge). */
+  foto_path?: string | null;
   catatan?: string;
   officer_id?: string;
   created_at: string;

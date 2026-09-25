@@ -15,6 +15,22 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { OcrPreScreenResult, PreScreenInitialData } from "../types";
+import {
+  PAGE_STARTED_AT,
+  QUOTA_MAX,
+  formatCountdown,
+  getCooldownSec,
+  getQuotaState,
+  getTurnstileSiteKey,
+  getTurnstileToken,
+  isQuotaBlockedMessage,
+  isQuotaFreeCode,
+  isTransientAiError,
+  readErrorJson,
+  recordScanAttempt,
+  setCooldown,
+  transientRetrySec,
+} from "../lib/antiSpam";
 
 interface OcrPreScreenCardProps {
   onProceedToWizard: (data: PreScreenInitialData) => void;
@@ -38,6 +54,69 @@ const INITIAL_RESULT: OcrPreScreenResult = {
 const BUKAN_KTP_MESSAGE =
   "File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang jelas dan tidak terpotong.";
 
+/** Label & warna badge per jenis dokumen — dipakai kartu hasil, modal, dan wizard. */
+export const JENIS_META: Record<string, { label: string; badge: string }> = {
+  KTP: { label: "e-KTP Indonesia", badge: "text-blue-800 bg-blue-100 border-blue-200" },
+  KK: { label: "Kartu Keluarga", badge: "text-violet-800 bg-violet-100 border-violet-200" },
+  AKTA: { label: "Akta Kelahiran", badge: "text-teal-800 bg-teal-100 border-teal-200" },
+  LAINNYA: { label: "Bukan Dokumen Kependudukan", badge: "text-red-700 bg-red-100 border-red-200" },
+};
+
+export function jenisLabel(jenis: unknown): string {
+  return JENIS_META[String(jenis || "LAINNYA")]?.label || String(jenis || "LAINNYA");
+}
+
+/**
+ * Susun alasan yang jelas dari hasil terstruktur: jenis + skor vs batas 70,
+ * status NIK (lengkap/sebagian/tidak terbaca), nama, lalu saran spesifik AI.
+ */
+function composeAlasan(args: {
+  jenis: string;
+  skor: number;
+  nikFull: string | null;
+  nikPartial: string | null;
+  nama: string | null;
+  saranAi: string;
+  tidakValid: boolean;
+  isLayak: boolean;
+}): string {
+  const label = jenisLabel(args.jenis);
+  if (args.tidakValid) {
+    return (
+      `${BUKAN_KTP_MESSAGE} ` +
+      "Pastikan yang difoto adalah e-KTP, Kartu Keluarga, atau Akta Kelahiran asli " +
+      "(bukan SIM, paspor, atau swafoto), seluruh bingkai dokumen masuk, dan tidak silau."
+    );
+  }
+  const digitCount = args.nikFull
+    ? 16
+    : args.nikPartial
+      ? args.nikPartial.replace(/\D/g, "").length
+      : 0;
+  const nikInfo =
+    digitCount === 16
+      ? "NIK 16 digit terbaca lengkap."
+      : digitCount > 0
+        ? `NIK terbaca sebagian (${digitCount}/16 digit) — dilengkapi manual dari fisik dokumen atau foto ulang lebih fokus.`
+        : "NIK tidak terbaca — ketik manual dari fisik dokumen atau foto ulang lebih fokus tanpa silau.";
+  const namaInfo = args.nama
+    ? `Nama terbaca: ${args.nama}.`
+    : "Nama tidak terbaca — dilengkapi di formulir.";
+  if (args.isLayak) {
+    return (
+      `Terdeteksi ${label} asli yang valid (skor kejelasan ${args.skor}/100, batas lolos 70). ` +
+      `${nikInfo} ${namaInfo} ` +
+      (args.saranAi || "Dokumen layak — lanjut ke formulir untuk terbit QR Fast-Track.")
+    );
+  }
+  return (
+    `Terdeteksi ${label} asli tetapi skor kejelasan ${args.skor}/100 di bawah batas lolos 70. ` +
+    `${nikInfo} ${namaInfo} ` +
+    (args.saranAi || "Foto ulang di tempat terang tanpa lampu flash.") +
+    " Anda tetap bisa lanjut — QR terbit sebagai REVISI, bawa fisik dokumen asli ke loket."
+  );
+}
+
 function normalizeJenis(raw: unknown): string {
   const upper = String(raw ?? "").toUpperCase().trim();
   if (!upper) return "LAINNYA";
@@ -58,6 +137,62 @@ function normalizeStatus(raw: unknown): string {
   return "BURAM";
 }
 
+/**
+ * Penilaian offline lokal — dipakai HANYA saat Layanan AI gangguan
+ * (kunci akses tidak valid / belum dikonfigurasi / sibuk) agar
+ * "Uji Coba Cepat" tetap memberi jawaban jujur, bukan mentok.
+ *
+ * Prinsip: tanpa AI kita TIDAK BISA memastikan e-KTP asli.
+ * Yang bisa dipastikan: file yang JELAS bukan dokumen kependudukan
+ * dari nama berkasnya (mis. "Infografis Taman Siswa.jpg", poster,
+ * screenshot, selfie). Untuk kasus itu kembalikan vonis TIDAK_VALID
+ * berlabel demo-offline; selain itu kembalikan null (tetap tampil
+ * kartu system-error + tombol Lanjut Manual).
+ */
+const NON_KTP_FILENAME_KEYWORDS = [
+  "infografis", "poster", "brosur", "pamflet", "flyer",
+  "taman", "siswa", "sekolah", "pendidikan", "wisuda",
+  "selfie", "swafoto", "screenshot", "tangkapan",
+  "sim", "paspor", "passport", "npwp", "bpjs",
+  "struk", "nota", "kwitansi", "sertifikat",
+];
+
+function looksLikeNonDukcapilByName(fileName: string): boolean {
+  const lower = String(fileName || "").toLowerCase();
+  if (!lower) return false;
+  // Nama file yang menyebut dokumen resmi justru JANGAN dianggap non-KTP.
+  if (/\b(ktp|kk\b|kartu.keluarga|akta|nik|dukcapil|e-ktp)\b/.test(lower)) return false;
+  return NON_KTP_FILENAME_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/** True bila pesan error menandakan gangguan AI server (bukan salah foto warga). */
+function isAiSystemErrorMessage(msg: string): boolean {
+  return /kunci akses|belum dikonfigurasi|sedang sibuk|sedang gangguan|gagal memproses|jawaban tak valid|gangguan sistem|verifikasi manual|coba lagi nanti|hubungi petugas loket/i.test(
+    String(msg || "")
+  );
+}
+
+function getImageDimensions(base64: string): Promise<{ w: number; h: number } | null> {
+  return new Promise((resolve) => {
+    try {
+      if (!base64 || base64.startsWith("data:application/pdf")) return resolve(null);
+      const img = new Image();
+      const timer = setTimeout(() => resolve(null), 4000);
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve({ w: img.naturalWidth || 0, h: img.naturalHeight || 0 });
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        resolve(null);
+      };
+      img.src = base64;
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToWizard }) => {
   // State kondisi: false (tampilan awal minimalis), true (setelah diunggah & dipindai)
   const [isScanned, setIsScanned] = useState<boolean>(false);
@@ -67,6 +202,10 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
   const [previewResult, setPreviewResult] = useState<OcrPreScreenResult>(INITIAL_RESULT);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  // Anti-spam: picu render ulang info kuota lokal (advisory, server otoritatif).
+  const [quotaTick, setQuotaTick] = useState<number>(0);
+  void quotaTick;
+  const quota = getQuotaState();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Race-guard: hanya hasil pindaian TERBARU yang boleh tampil (abaikan respons basi).
@@ -112,13 +251,20 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
   const processUploadedFile = (file: File) => {
     if (!file) return;
 
-    // Validasi lebih dulu: tipe & ukuran (samakan dengan backend: maks 10MB)
+    // Anti-spam: cooldown lokal 30 detik antar-pindaian.
+    const cd = getCooldownSec();
+    if (cd > 0) {
+      failPreview("", file.name, `Terlalu cepat mengirim berkas. Tunggu ${formatCountdown(cd)} sebelum memindai lagi.`);
+      return;
+    }
+
+    // Validasi lebih dulu: tipe & ukuran (samakan backend file-guard: maks 4.2MB)
     if (!isSupportedFile(file)) {
       failPreview("", file.name, "Format file harus JPG, PNG, WEBP, atau PDF.");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      failPreview("", file.name, "Ukuran file melebihi 10MB. Kompres/kecilkan foto lalu unggah ulang.");
+    if (file.size > 4_200_000) {
+      failPreview("", file.name, "Ukuran file melebihi 4MB (batas server). Kompres/kecilkan foto lalu unggah ulang.");
       return;
     }
 
@@ -143,38 +289,111 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
       }, 500);
 
       try {
-        let response: Response;
-        try {
-          response = await fetch("/api/ocr", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              imageBase64: base64,
-            }),
-          });
-          if (!response.ok) {
-            throw new Error("fallback to scan-document");
-          }
-        } catch {
-          response = await fetch("/api/scan-document", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              imageBase64: base64,
-            }),
-          });
-          if (myScanId !== scanIdRef.current) return;
-          if (!response.ok) {
-            // Error sistem (AI down, 5xx) JANGAN disamarkan jadi "bukan KTP"
-            let errMsg = `Layanan OCR gangguan (HTTP ${response.status}). Coba lagi sesaat.`;
-            try {
-              const errJson: any = await response.clone().json();
-              errMsg = errJson?.message || errJson?.error || errMsg;
-            } catch {}
-            throw new Error(errMsg);
-          }
+        // Anti-spam: siapkan token manusia untuk percobaan terakhir (tanpa login).
+        const siteKey = getTurnstileSiteKey();
+        const q = getQuotaState();
+        let turnstileToken: string | null = null;
+        if (siteKey && q.remaining <= 1) {
+          setScanStepText("Memverifikasi manusia (captcha)...");
+          turnstileToken = await getTurnstileToken(siteKey);
         }
-
+        const buildBody = () =>
+          JSON.stringify({
+            imageBase64: base64,
+            startedAt: PAGE_STARTED_AT,
+            website_confirm: "",
+            ...(turnstileToken ? { turnstileToken } : {}),
+          });
+        // POST dengan timeout 60 dtk agar "fetch failed" tidak gantung.
+        const postOnce = (url: string): Promise<Response> => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 60_000);
+          return fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: buildBody(),
+            signal: ctrl.signal,
+          }).finally(() => clearTimeout(timer));
+        };
+        // Satu percobaan penuh: POST -> fallback (404 saja) -> captcha 403.
+        // Fallback untuk 502 TRANSIENT sengaja DIMATIKAN (1 klik = 1 AI-call).
+        const doAttempt = async (): Promise<Response> => {
+          let response: Response;
+          try {
+            response = await postOnce("/api/ocr");
+          } catch {
+            response = await postOnce("/api/scan-document");
+          }
+          if (myScanId !== scanIdRef.current) return response;
+          if (response.status === 404) {
+            try {
+              const alt = await postOnce("/api/scan-document");
+              if (myScanId !== scanIdRef.current) return response;
+              response = alt;
+            } catch {
+              // pertahankan respons awal
+            }
+          }
+          if (response.status === 403) {
+            const err0 = await readErrorJson(response);
+            if (err0.captchaRequired) {
+              if (myScanId !== scanIdRef.current) return response;
+              setScanStepText("Memverifikasi manusia (captcha)...");
+              turnstileToken = await getTurnstileToken(siteKey);
+              if (myScanId !== scanIdRef.current) return response;
+              if (turnstileToken) {
+                try {
+                  response = await postOnce("/api/ocr");
+                } catch {
+                  response = await postOnce("/api/scan-document");
+                }
+                if (myScanId !== scanIdRef.current) return response;
+              } else {
+                throw new Error(
+                  "Verifikasi manusia diperlukan untuk pemindaian terakhir dan captcha gagal dimuat. Periksa koneksi lalu pindai ulang, atau lanjut via Isi Manual di bawah."
+                );
+              }
+            }
+          }
+          return response;
+        };
+        const ensureOkOrRetry = async (attempt: 0 | 1): Promise<Response> => {
+          const response = await doAttempt();
+          if (myScanId !== scanIdRef.current) return response;
+          if (response.ok) return response;
+          const err = await readErrorJson(response);
+          if (isTransientAiError(err, response.status) && attempt === 0) {
+            const waitSec = transientRetrySec(err.subcode, err.retryAfter);
+            for (let left = waitSec; left > 0; left--) {
+              if (myScanId !== scanIdRef.current) return response;
+              setScanStepText(
+                `Layanan AI sibuk — mencoba otomatis dalam ${left} dtk (percobaan 2/2)...`
+              );
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+            if (myScanId !== scanIdRef.current) return response;
+            setScanStepText("2/3 Menjalankan OCR Gemini Vision & validasi NIK 16 digit...");
+            return ensureOkOrRetry(1);
+          }
+          if (!isQuotaFreeCode(err.code)) {
+            recordScanAttempt();
+            setQuotaTick((t) => t + 1);
+          }
+          // System-error / transient TIDAK set cooldown 30 dtk (bisa retry cepat;
+          // spam tetap dibatasi rate-limit server).
+          if (!isTransientAiError(err, response.status)) {
+            setCooldown();
+          }
+          let msg = err.message;
+          if (response.status === 429 && err.retryAfter > 0) {
+            msg += ` Coba lagi dalam ${formatCountdown(err.retryAfter)}.`;
+          } else if (isTransientAiError(err, response.status)) {
+            const waitSec = transientRetrySec(err.subcode, err.retryAfter);
+            msg += ` Akan dicoba otomatis 1x dalam ~${waitSec} dtk; bila masih sibuk, tekan Coba Pindai Ulang atau Lanjut Isi Manual.`;
+          }
+          throw new Error(msg);
+        };
+        let response = await ensureOkOrRetry(0);
         if (myScanId !== scanIdRef.current) return;
         const data = await response.json();
         if (myScanId !== scanIdRef.current) return;
@@ -182,11 +401,12 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
         setScanProgress(100);
 
         // Gangguan sistem yang dikembalikan sebagai 200 + flag: tampilkan jujur, bukan vonis invalid
+        // (tanpa bakar cooldown — boleh retry cepat; spam tetap dibatasi server).
         const parsedRes = data.data || data;
         const sysErr =
           Boolean((data as any)?.isSystemError) ||
           Boolean(parsedRes?.isSystemError) ||
-          /belum dikonfigurasi|gagal memproses|jawaban tak valid|gangguan sistem|verifikasi manual/i.test(
+          /belum dikonfigurasi|gagal memproses|jawaban tak valid|gangguan|kunci akses|sedang sibuk|verifikasi manual|coba lagi nanti|hubungi petugas loket/i.test(
             String((data as any)?.message || parsedRes?.catatan || "")
           );
         if (sysErr) {
@@ -194,6 +414,9 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
             String((data as any)?.message || "Layanan AI gagal memproses foto. Coba lagi dengan foto lebih jelas.")
           );
         }
+        recordScanAttempt();
+        setQuotaTick((t) => t + 1);
+        setCooldown();
         const jenis = normalizeJenis(parsedRes.jenis_dokumen);
         let status = normalizeStatus(parsedRes.status_verifikasi);
         // Konsistensi silang: LAINNYA pasti TIDAK_VALID
@@ -210,25 +433,41 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
               ? 92
               : 45;
 
+        const nikFull: string | null =
+          !tidakValid && typeof parsedRes.nik === "string" && /^\d{16}$/.test(parsedRes.nik.replace(/\D/g, ""))
+            ? parsedRes.nik.replace(/\D/g, "")
+            : null;
+        const nikPartial: string | null =
+          !tidakValid && !nikFull && typeof parsedRes.nik_partial === "string"
+            ? parsedRes.nik_partial.replace(/\D/g, "")
+            : null;
+        const namaOk: string | null =
+          !tidakValid && typeof parsedRes.nama === "string" && parsedRes.nama.trim() && !/tidak terbaca/i.test(parsedRes.nama)
+            ? parsedRes.nama.trim()
+            : null;
+
         setPreviewResult({
           imageBase64: base64,
           imageName: file.name,
           status_kelayakan: isLayak ? "LAYAK" : "TIDAK_LAYAK",
           skor_kejelasan: score,
           status_kejelasan: tidakValid ? "DITOLAK" : isLayak ? "LULUS" : "KURANG_TAJAM",
-          nik_terdeteksi: tidakValid ? false : !!parsedRes.nik,
+          nik_terdeteksi: nikFull !== null,
           nik_value: tidakValid
             ? "Tidak Terdeteksi"
-            : parsedRes.nik ||
-              (parsedRes.nik_partial ? `${parsedRes.nik_partial} (sebagian)` : "Tidak Terdeteksi"),
-          nama_terdeteksi: tidakValid ? "Tidak Terbaca" : parsedRes.nama || "Tidak Terbaca",
+            : nikFull || (nikPartial ? `${nikPartial} (sebagian)` : "Tidak Terdeteksi"),
+          nama_terdeteksi: namaOk || "Tidak Terbaca",
           pencahayaan_status: isLayak ? "SESUAI_STANDAR" : "KURANG_TERANG",
-          catatan: tidakValid
-            ? BUKAN_KTP_MESSAGE
-            : parsedRes.catatan ||
-              (isLayak
-                ? "Dokumen valid dan terbaca jelas oleh AI."
-                : "Foto kurang tajam atau tidak memenuhi standar pencahayaan fisik."),
+          catatan: composeAlasan({
+            jenis,
+            skor: score,
+            nikFull,
+            nikPartial,
+            nama: namaOk,
+            saranAi: tidakValid ? "" : String(parsedRes.catatan || ""),
+            tidakValid,
+            isLayak,
+          }),
           jenis_dokumen: jenis,
           status_verifikasi: status,
           isSystemError: false,
@@ -242,10 +481,46 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
         setScanProgress(100);
         // Pesan jaringan mentah (Inggris) diterjemahkan agar warga paham
         const rawMsg = String(err?.message || "");
-        const friendlyMsg = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMsg)
+        let friendlyMsg = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMsg)
           ? "Gagal menghubungi server OCR. Periksa koneksi internet lalu pindai ulang foto e-KTP asli."
           : rawMsg || "Gagal menghubungi server OCR. Periksa koneksi lalu pindai ulang foto e-KTP asli.";
-        // Gangguan sistem/koneksi: tandai isSystemError agar banner TIDAK memvonis "bukan KTP"
+        // Tegaskan bila ini masalah server (kunci API / AI sibuk): bukan salah foto warga.
+        if (isAiSystemErrorMessage(friendlyMsg) && !/bukan salah foto anda/i.test(friendlyMsg)) {
+          friendlyMsg += " Bukan salah foto Anda.";
+        }
+        // Fallback offline: file yang JELAS bukan dokumen kependudukan dari
+        // nama berkasnya tetap divonis TIDAK_VALID (berlabel demo) meski AI mati.
+        // Contoh: "Infografis Taman Siswa.jpg" -> bukan KTP, tanpa perlu AI.
+        if (isAiSystemErrorMessage(friendlyMsg) && looksLikeNonDukcapilByName(file.name)) {
+          const dims = await getImageDimensions(base64);
+          const dimInfo = dims ? ` Dimensi gambar ${dims.w}x${dims.h}px.` : "";
+          if (myScanId !== scanIdRef.current) return;
+          setPreviewResult({
+            imageBase64: base64,
+            imageName: file.name,
+            status_kelayakan: "TIDAK_LAYAK",
+            skor_kejelasan: 10,
+            status_kejelasan: "DITOLAK",
+            nik_terdeteksi: false,
+            nik_value: "Tidak Terdeteksi",
+            nama_terdeteksi: "Tidak Terbaca",
+            pencahayaan_status: "KURANG_TERANG",
+            catatan:
+              `${BUKAN_KTP_MESSAGE} (Penilaian offline sementara — Layanan AI sedang gangguan, ` +
+              `jadi file dinilai dari nama & bentuk berkas.${dimInfo} ` +
+              `Untuk kepastian, pindai ulang foto e-KTP asli saat layanan pulih.)`,
+            jenis_dokumen: "LAINNYA",
+            status_verifikasi: "TIDAK_VALID",
+            isSystemError: false,
+            isOfflineDemo: true,
+          });
+          setIsScanning(false);
+          setIsScanned(true);
+          return;
+        }
+        // Gangguan sistem/koneksi murni: tandai isSystemError agar banner
+        // TIDAK memvonis "bukan KTP". Metrik dikosongkan (skor 0 + status
+        // DITOLAK hanya untuk internal; tampilan memakai "–").
         setPreviewResult({
           imageBase64: base64,
           imageName: file.name,
@@ -320,8 +595,12 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
     ) {
       return;
     }
+    const jenisLanjut = String(previewResult.jenis_dokumen || "LAINNYA");
     onProceedToWizard({
-      service: "Penerbitan KTP-EL Baru / Penggantian",
+      // Hanya KTP yang otomatis memilih layanan KTP-EL. KK/Akta diteruskan
+      // apa adanya agar user memilih urusan yang sesuai di wizard (dengan
+      // chip info dokumen), bukan dipaksa masuk layanan KTP.
+      ...(jenisLanjut === "KTP" ? { service: "Penerbitan KTP-EL Baru / Penggantian" } : {}),
       // Hanya NIK 16 digit utuh yang diteruskan — NIK parsial ("(sebagian)") JANGAN
       // diloloskan agar wizard tidak menolak dengan alert dan user tidak mentok.
       nik: previewResult.nik_terdeteksi && /^\d{16}$/.test(previewResult.nik_value.replace(/\D/g, ""))
@@ -333,22 +612,49 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
       imageBase64: previewResult.imageBase64,
       imageName: previewResult.imageName,
       preScreenScore: previewResult.skor_kejelasan,
+      jenisDokumen: jenisLanjut,
+    });
+  };
+
+  // Gangguan sistem: user TETAP bisa lanjut isi formulir manual
+  // (NIK + nama diketik sendiri dari fisik dokumen). Bukan vonis invalid,
+  // jadi wizard dibuka dengan data kosong + foto terlampir untuk verifikasi loket.
+  const handleProceedManual = () => {
+    if (!previewResult) return;
+    onProceedToWizard({
+      nik: "",
+      nama: "",
+      imageBase64: previewResult.imageBase64,
+      imageName: previewResult.imageName,
+      preScreenScore: 0,
+      jenisDokumen: "LAINNYA",
     });
   };
 
   // Gangguan sistem (AI/koneksi) DIBEDAKAN dari vonis "bukan KTP":
-  // kartu system-error tidak boleh berjudul merah "File Bukan..." dan tidak boleh lanjut ke QR.
+  // kartu system-error tidak boleh berjudul merah "File Bukan...".
+  // Hasil demo-offline (penilaian nama berkas saat AI mati) adalah vonis
+  // TIDAK_VALID yang sah untuk diblokir total.
+  // Blokir kuota DIBEDAKAN lagi: AI belum sempat melihat berkas sama sekali,
+  // jadi banner harus tegas "bukan salah foto" + tawarkan isi manual.
   const isSystemError = previewResult.isSystemError === true;
+  const isQuotaBlocked = isSystemError && isQuotaBlockedMessage(previewResult.catatan);
+  const isOfflineDemo = previewResult.isOfflineDemo === true;
   const isTidakValid =
-    previewResult.status_verifikasi === "TIDAK_VALID" ||
-    previewResult.jenis_dokumen === "LAINNYA" ||
-    previewResult.status_kejelasan === "DITOLAK";
+    !isSystemError &&
+    (previewResult.status_verifikasi === "TIDAK_VALID" ||
+      previewResult.jenis_dokumen === "LAINNYA" ||
+      previewResult.status_kejelasan === "DITOLAK");
   const isLayak = previewResult.status_kelayakan === "LAYAK" && !isTidakValid && !isSystemError;
+  // NIK parsial ("12345678 (sebagian)") harus tetap tampil, bukan "Tidak Terdeteksi".
+  const nikDigitsShown = previewResult.nik_value.replace(/\D/g, "");
+  const nikPartialShown = !previewResult.nik_terdeteksi && nikDigitsShown.length > 0;
 
   return (
     <section
       id="ocrScannerSection"
-      className="w-full max-w-5xl mx-auto p-2 sm:p-4 font-sans"
+      className="w-full max-w-5xl mx-auto p-2 sm:p-4"
+      style={{ fontFamily: "'Poppins', sans-serif" }}
     >
       {/* Hidden file input */}
       <input
@@ -481,6 +787,10 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                 <p className="text-[11px] text-slate-400 group-hover:text-slate-300 transition-colors">
                   atau tarik & lepas foto e-KTP / KK ke sini (JPG, PNG, PDF)
                 </p>
+                <p className="text-[10px] font-mono text-cyan-400/70">
+                  Kesempatan pindai: {quota.remaining}/{QUOTA_MAX} per 10 mnt
+                  {quota.resetSec > 0 && quota.remaining === 0 ? ` • reset ${formatCountdown(quota.resetSec)}` : ""}
+                </p>
               </div>
 
               {/* Footer Bar Scanner */}
@@ -517,10 +827,10 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                     isSystemError
                       ? "bg-slate-500/10 text-slate-600"
                       : isTidakValid
-                        ? "bg-red-500/10 text-red-600"
+                        ? "bg-red-500/10 text-red-500"
                         : isLayak
                           ? "bg-emerald-500/10 text-emerald-600"
-                          : "bg-amber-500/10 text-amber-600"
+                          : "bg-amber-500/10 text-amber-500"
                   }`}
                 >
                   {isLayak ? (
@@ -536,42 +846,52 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                         isSystemError
                           ? "bg-slate-500"
                           : isTidakValid
-                            ? "bg-red-600"
+                            ? "bg-red-500"
                             : isLayak
                               ? "bg-emerald-600"
                               : "bg-amber-500"
                       }`}
                     >
-                      {isSystemError
-                        ? "Gagal Memindai — Coba Lagi"
-                        : isTidakValid
-                          ? "File Bukan Kartu Kependudukan Indonesia"
-                          : isLayak
-                            ? "Dokumen Layak & Terbaca Jelas"
-                            : "Foto Buram / Perlu Perbaikan"}
+                      {isQuotaBlocked
+                        ? "Kuota Pindaian Habis — AI Belum Memeriksa Berkas"
+                        : isSystemError
+                          ? "Gagal Memindai — Coba Lagi"
+                          : isTidakValid
+                            ? "File Bukan Kartu Kependudukan Indonesia"
+                            : isLayak
+                              ? "Dokumen Layak & Terbaca Jelas"
+                              : "Foto Buram / Perlu Perbaikan"}
                     </span>
                     <span
                       className={`text-xs font-bold px-2.5 py-0.5 rounded-md ${
                         isSystemError
                           ? "text-slate-700 bg-slate-200 border border-slate-300"
                           : isTidakValid
-                            ? "text-red-800 bg-red-100 border border-red-200"
+                            ? "text-red-700 bg-red-100 border border-red-200"
                             : isLayak
                               ? "text-emerald-800 bg-emerald-100 border border-emerald-200"
                               : "text-amber-800 bg-amber-100 border border-amber-200"
                       }`}
                     >
-                      Skor AI: {previewResult.skor_kejelasan}/100
+                      {isSystemError ? "Skor AI: –" : `Skor AI: ${previewResult.skor_kejelasan}/100`}
                     </span>
                     <span
                       className={`text-xs font-bold px-2.5 py-0.5 rounded-md border ${
-                        (previewResult.jenis_dokumen || "LAINNYA") === "KTP"
-                          ? "text-blue-800 bg-blue-100 border-blue-200"
-                          : "text-slate-700 bg-white border-slate-200"
+                        isSystemError
+                          ? "text-slate-700 bg-slate-200 border-slate-300"
+                          : JENIS_META[previewResult.jenis_dokumen || "LAINNYA"]?.badge ||
+                            "text-slate-700 bg-white border-slate-200"
                       }`}
                     >
-                      Jenis Dokumen: {previewResult.jenis_dokumen || "LAINNYA"}
+                      {isSystemError
+                        ? "Jenis Dokumen: –"
+                        : `Jenis Dokumen: ${jenisLabel(previewResult.jenis_dokumen)}`}
                     </span>
+                    {isOfflineDemo && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-md text-amber-800 bg-amber-100 border border-amber-200">
+                        Penilaian Offline (AI gangguan)
+                      </span>
+                    )}
                   </div>
                   <p
                     className={`text-xs sm:text-sm mt-1 leading-relaxed ${
@@ -693,31 +1013,41 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                       <Eye className="w-4 h-4 text-blue-500" />
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-slate-800">
-                        {previewResult.skor_kejelasan}% -{" "}
-                        {previewResult.status_kejelasan === "LULUS"
-                          ? "LULUS TAJAM"
-                          : previewResult.status_kejelasan === "DITOLAK"
-                            ? "DITOLAK"
-                            : "KURANG TAJAM"}
+                      <div className="text-sm font-bold text-[#0F172A]">
+                        {isSystemError ? (
+                          "–"
+                        ) : (
+                          <>
+                            {previewResult.skor_kejelasan}% -{" "}
+                            {previewResult.status_kejelasan === "LULUS"
+                              ? "LULUS TAJAM"
+                              : previewResult.status_kejelasan === "DITOLAK"
+                                ? "DITOLAK"
+                                : "KURANG TAJAM"}
+                          </>
+                        )}
                       </div>
                       <div className="w-full bg-slate-200 h-1.5 rounded-full mt-2 overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-500 ${
-                            isLayak
-                              ? "bg-emerald-500"
-                              : isTidakValid && !isSystemError
-                                ? "bg-red-500"
-                                : "bg-amber-500"
+                            isSystemError
+                              ? "bg-slate-300"
+                              : isLayak
+                                ? "bg-emerald-500"
+                                : isTidakValid
+                                  ? "bg-red-500"
+                                  : "bg-amber-500"
                           }`}
-                          style={{ width: `${previewResult.skor_kejelasan}%` }}
+                          style={{ width: isSystemError ? "0%" : `${previewResult.skor_kejelasan}%` }}
                         ></div>
                       </div>
                     </div>
                     <p className="text-[11px] text-slate-500">
-                      {isLayak
-                        ? "DPI tajam & kontras teks sangat jelas."
-                        : "Huruf kabur pada area NIK."}
+                      {isSystemError
+                        ? "Belum dinilai (gangguan sistem)."
+                        : isLayak
+                          ? "DPI tajam & kontras teks sangat jelas."
+                          : "Huruf kabur pada area NIK."}
                     </p>
                   </div>
 
@@ -732,13 +1062,21 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                       )}
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-slate-800 font-mono truncate">
-                        {previewResult.nik_terdeteksi ? previewResult.nik_value : "Tidak Terdeteksi"}
+                      <div className="text-sm font-bold text-[#0F172A] font-mono truncate">
+                        {isSystemError
+                          ? "–"
+                          : previewResult.nik_terdeteksi || nikPartialShown
+                            ? previewResult.nik_value
+                            : "Tidak Terdeteksi"}
                       </div>
                       <p className="text-[11px] text-slate-500 mt-1">
                         {previewResult.nik_terdeteksi
                           ? "NIK lengkap dan terbaca valid."
-                          : "Digit terpotong / tertutup silau."}
+                          : nikPartialShown
+                            ? `Terbaca ${nikDigitsShown.length}/16 digit — dilengkapi manual / foto ulang.`
+                            : isSystemError
+                              ? "Belum dinilai (gangguan sistem)."
+                              : "Digit terpotong / tertutup silau."}
                       </p>
                     </div>
                   </div>
@@ -750,15 +1088,19 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                       <Sun className={`w-4 h-4 ${isLayak ? "text-blue-500" : "text-amber-500"}`} />
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-slate-800">
-                        {previewResult.pencahayaan_status === "SESUAI_STANDAR"
-                          ? "Sesuai Standar"
-                          : "Kurang Terang"}
+                      <div className="text-sm font-bold text-[#0F172A]">
+                        {isSystemError
+                          ? "–"
+                          : previewResult.pencahayaan_status === "SESUAI_STANDAR"
+                            ? "Sesuai Standar"
+                            : "Kurang Terang"}
                       </div>
                       <p className="text-[11px] text-slate-500 mt-1">
-                        {previewResult.pencahayaan_status === "SESUAI_STANDAR"
-                          ? "Pencahayaan merata tanpa silau."
-                          : "Pencahayaan redup / ada refleksi."}
+                        {isSystemError
+                          ? "Belum dinilai (gangguan sistem)."
+                          : previewResult.pencahayaan_status === "SESUAI_STANDAR"
+                            ? "Pencahayaan merata tanpa silau."
+                            : "Pencahayaan redup / ada refleksi."}
                       </p>
                     </div>
                   </div>
@@ -768,14 +1110,25 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                 {/* TOMBOL AKSI — dokumen valid (layak/buram) selalu bisa lanjut ke QR */}
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   {isSystemError ? (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex-1 bg-slate-600 hover:bg-slate-700 active:bg-slate-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      <span>Coba Pindai Ulang</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        title={isQuotaBlocked ? "Kuota masih habis — pindaian akan ditolak lagi sampai reset. Gunakan Lanjut Isi Manual." : undefined}
+                        className="flex-1 bg-slate-600 hover:bg-slate-700 active:bg-slate-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        <span>{isQuotaBlocked ? "Coba Lagi Nanti (Kuota Habis)" : "Coba Pindai Ulang"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleProceedManual}
+                        className="flex-1 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <ArrowRight className="w-4 h-4" />
+                        <span>Lanjut Isi Manual (Tanpa Skor AI)</span>
+                      </button>
+                    </>
                   ) : isLayak ? (
                     <button
                       type="button"
@@ -789,7 +1142,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex-1 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
+                      className="flex-1 bg-red-500 hover:bg-red-600 active:bg-red-700 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
                     >
                       <Upload className="w-4 h-4" />
                       <span>Unggah Ulang Foto e-KTP Asli</span>
@@ -856,7 +1209,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                 <div
                   className={`p-3 rounded-xl border flex items-center justify-between ${
                     isSystemError
-                      ? "bg-slate-100 border-slate-300 text-slate-800"
+                      ? "bg-slate-100 border-slate-300 text-[#0F172A]"
                       : isTidakValid
                         ? "bg-red-50 border-red-200 text-red-900"
                         : isLayak
@@ -866,16 +1219,18 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                 >
                   <span className="font-bold text-xs uppercase">
                     Status:{" "}
-                    {isSystemError
-                      ? "Gagal Memindai — Coba Lagi"
-                      : isTidakValid
-                        ? "File Bukan KTP Indonesia"
-                        : isLayak
-                          ? "Layak Diproses"
-                          : "Perlu Perbaikan"}
+                    {isQuotaBlocked
+                      ? "Kuota Habis — Belum Dinilai AI"
+                      : isSystemError
+                        ? "Gagal Memindai — Coba Lagi"
+                        : isTidakValid
+                          ? "File Bukan KTP Indonesia"
+                          : isLayak
+                            ? "Layak Diproses"
+                            : "Perlu Perbaikan"}
                   </span>
                   <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-white/80">
-                    Skor: {previewResult.skor_kejelasan}/100
+                    Skor: {isSystemError ? "–" : `${previewResult.skor_kejelasan}/100`}
                   </span>
                 </div>
               </div>
@@ -884,28 +1239,45 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
               <div className="mt-4 space-y-3 text-xs">
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
                   <span className="text-slate-400 block text-[11px]">Jenis Dokumen Terdeteksi:</span>
-                  <p className="font-bold text-slate-800">
-                    {previewResult.jenis_dokumen || "LAINNYA"}
-                    {previewResult.status_verifikasi
+                  <p className="font-bold text-[#0F172A]">
+                    {isQuotaBlocked
+                      ? "Belum dinilai (terblokir kuota — AI belum melihat berkas)"
+                      : isSystemError
+                        ? "Tidak diketahui (gangguan sistem)"
+                        : jenisLabel(previewResult.jenis_dokumen)}
+                    {!isSystemError && previewResult.status_verifikasi
                       ? ` • ${previewResult.status_verifikasi}`
                       : ""}
                   </p>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
                   <span className="text-slate-400 block text-[11px]">Nama Berkas:</span>
-                  <p className="font-mono font-medium text-slate-800">{previewResult.imageName || "-"}</p>
+                  <p className="font-mono font-medium text-[#0F172A]">{previewResult.imageName || "-"}</p>
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
                   <span className="text-slate-400 block text-[11px]">16-Digit NIK:</span>
-                  <p className="font-mono font-bold text-slate-800">
-                    {previewResult.nik_terdeteksi ? previewResult.nik_value : "Tidak Terdeteksi"}
+                  <p className="font-mono font-bold text-[#0F172A]">
+                    {isQuotaBlocked
+                      ? "– (belum dinilai — terblokir kuota)"
+                      : isSystemError
+                        ? "– (belum dinilai)"
+                        : previewResult.nik_terdeteksi || nikPartialShown
+                          ? previewResult.nik_value
+                          : "Tidak Terdeteksi"}
                   </p>
+                  {nikPartialShown && (
+                    <p className="text-[11px] text-amber-700">
+                      Terbaca {nikDigitsShown.length}/16 digit — dilengkapi manual di formulir atau foto ulang.
+                    </p>
+                  )}
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
                   <span className="text-slate-400 block text-[11px]">Nama Pemohon Terdeteksi:</span>
-                  <p className="font-semibold text-slate-800">{previewResult.nama_terdeteksi || "Tidak Terbaca"}</p>
+                  <p className="font-semibold text-[#0F172A]">
+                    {isQuotaBlocked ? "– (belum dinilai — terblokir kuota)" : isSystemError ? "– (belum dinilai)" : previewResult.nama_terdeteksi || "Tidak Terbaca"}
+                  </p>
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">

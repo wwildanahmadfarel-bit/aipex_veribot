@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, X, Send, Sparkles, Loader2 } from 'lucide-react';
+import { X, Send, Sparkles, Loader2 } from 'lucide-react';
 import { AipexLogo } from './AipexLogo';
+import { renderChatReply } from '../lib/chatFormat';
 
 export default function FloatingVeriBot() {
   const TESTIMONI_URL = "https://forms.gle/RT12pHjuLkLnePEz9";
@@ -14,25 +15,10 @@ export default function FloatingVeriBot() {
     { id: 2, sender: 'bot', text: `Puas dengan layanan kami? Mohon luangkan 1 menit untuk isi testimoni di sini: ${TESTIMONI_URL} 🙏` }
   ]);
 
-  // Render teks chat + otomatis jadikan URL sebagai link klik (target _blank)
+  // Render jawaban bot: paragraf justify + alinea, tebal/miring, daftar, link.
+  // (Menggantikan render span polos: markdown ** dan baris baru kini tampil rapi.)
   const renderMessageText = (text: string) => {
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const parts = text.split(urlRegex);
-    return parts.map((part, i) =>
-      urlRegex.test(part) ? (
-        <a
-          key={i}
-          href={part}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-blue-600 underline break-all hover:text-blue-800"
-        >
-          {part}
-        </a>
-      ) : (
-        <span key={i}>{part}</span>
-      )
-    );
+    return renderChatReply(text);
   };
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +45,15 @@ export default function FloatingVeriBot() {
         body: JSON.stringify({ message: text }),
       });
       const data = await res.json();
+      if (res.status === 429) {
+        const waitSec = Number((data as any)?.retryAfter) || 0;
+        const waitTxt = waitSec > 0 ? ` Coba lagi dalam ${Math.ceil(waitSec / 60)} menit.` : "";
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now() + 1, sender: 'bot', text: `Terlalu banyak pertanyaan dalam waktu singkat.${waitTxt}` }
+        ]);
+        return;
+      }
       const replyText = data.reply || data.text || 'Terima kasih! Pertanyaan Anda telah diterima. Silakan pilih menu di bawah atau unggah berkas untuk verifikasi.';
       setMessages((prev) => [
         ...prev,
@@ -75,14 +70,14 @@ export default function FloatingVeriBot() {
   };
 
   return (
-    <aside aria-label="Asisten Chat VeriBot" className="fixed bottom-5 right-5 z-50 font-sans flex flex-col items-end">
+    <aside aria-label="Asisten Chat VeriBot" className="fixed bottom-5 right-5 z-50 flex flex-col items-end" style={{ fontFamily: "'Poppins', sans-serif" }}>
       
       {/* 1. JENDELA CHAT (Hanya dirender jika isOpen === true) */}
       {isOpen && (
-        <div className="w-[340px] sm:w-[380px] h-[480px] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-3 animate-in fade-in slide-in-from-bottom-4 duration-200">
+        <div className="w-[calc(100vw-2.5rem)] max-w-[380px] h-[min(480px,72dvh)] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden mb-3 animate-in fade-in slide-in-from-bottom-4 duration-200">
           
           {/* HEADER CHAT */}
-          <div className="bg-[#0f172a] text-white p-3.5 flex items-center justify-between border-b border-slate-800">
+          <div className="bg-[#1E293B] text-white p-3.5 flex items-center justify-between border-b border-slate-800">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-white border border-slate-200 p-1 flex items-center justify-center shrink-0 shadow-xs">
                 <AipexLogo className="w-full h-full" size={24} />
@@ -117,7 +112,7 @@ export default function FloatingVeriBot() {
                   className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed shadow-sm ${
                     msg.sender === 'user'
                       ? 'bg-blue-600 text-white rounded-tr-none'
-                      : 'bg-white text-slate-800 border border-slate-200/80 rounded-tl-none'
+                      : 'bg-white text-[#0F172A] border border-slate-200/80 rounded-tl-none'
                   }`}
                 >
                   {msg.sender === 'bot' ? renderMessageText(msg.text) : msg.text}
@@ -173,7 +168,7 @@ export default function FloatingVeriBot() {
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
               placeholder="Ketik pertanyaan..."
-              className="flex-1 bg-slate-100 text-xs text-slate-800 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-transparent focus:bg-white transition"
+              className="flex-1 bg-slate-100 text-xs text-[#0F172A] rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-transparent focus:bg-white transition"
             />
             <button
               onClick={() => handleSendMessage()}
@@ -191,12 +186,12 @@ export default function FloatingVeriBot() {
       {/* 2. TOMBOL FLOATING POP-UP BUBBLE (Ukuran Presisi 1:1 / Square aspect ratio) */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-14 h-14 bg-[#0f172a] hover:bg-slate-800 active:scale-95 text-white rounded-full flex items-center justify-center shadow-xl border border-slate-700 relative transition-transform duration-200 group"
+        className="w-14 h-14 bg-[#1E293B] hover:bg-slate-800 active:scale-95 text-white rounded-full flex items-center justify-center shadow-xl border border-slate-700 relative transition-transform duration-200 group"
         title={isOpen ? 'Tutup Chat' : 'Tanya VeriBot AI'}
         aria-label="Tanya VeriBot AI"
       >
         {/* Indikator Online (Titik Hijau dengan Aksen Pulse) */}
-        <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-[#0f172a] rounded-full"></span>
+        <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-[#1E293B] rounded-full"></span>
         <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-400 rounded-full animate-ping opacity-75 pointer-events-none"></span>
 
         {/* Dynamic Icon */}

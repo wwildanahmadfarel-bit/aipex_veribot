@@ -13,6 +13,20 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { PrescreeningResult } from "../types";
+import { buildTicketQrText } from "../lib/ticketQr";
+import {
+  PAGE_STARTED_AT,
+  QUOTA_MAX,
+  formatCountdown,
+  getCooldownSec,
+  getQuotaState,
+  getTurnstileSiteKey,
+  getTurnstileToken,
+  isQuotaFreeCode,
+  readErrorJson,
+  recordScanAttempt,
+  setCooldown,
+} from "../lib/antiSpam";
 
 export interface TicketData {
   kode_tiket: string;
@@ -102,41 +116,68 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
     setManualNik("");
 
     try {
+      // Anti-spam: token manusia untuk percobaan terakhir + field bot-check.
+      const siteKey = getTurnstileSiteKey();
+      if (siteKey && getQuotaState().remaining <= 1) {
+        const t = await getTurnstileToken(siteKey);
+        if (t) formData.set("turnstileToken", t);
+      }
+      if (!formData.has("startedAt")) formData.set("startedAt", String(PAGE_STARTED_AT));
+      if (!formData.has("website_confirm")) formData.set("website_confirm", "");
+
+      const postOnce = (url: string) => fetch(url, { method: "POST", body: formData });
       let res: Response;
       let lastHttpStatus = 0;
       try {
-        res = await fetch("/api/ocr", {
-          method: "POST",
-          body: formData,
-        });
-        lastHttpStatus = res.status;
-        if (!res.ok) {
-          throw new Error("fallback to scan-document");
-        }
+        res = await postOnce("/api/ocr");
       } catch {
+        res = await postOnce("/api/scan-document");
+      }
+      lastHttpStatus = res.status;
+      // Fallback hanya untuk 404/5xx: error 4xx (file invalid, kuota, captcha)
+      // tidak akan berubah bila diulang ke endpoint lain — fallback hanya
+      // membakar kuota 2x untuk 1x klik.
+      if (res.status === 404 || (res.status >= 500 && res.status <= 599)) {
         try {
-          res = await fetch("/api/scan-document", {
-            method: "POST",
-            body: formData,
-          });
-          lastHttpStatus = res.status;
-          if (!res.ok) {
-            // Baca pesan error jujur (mis. AI belum dikonfigurasi) — jangan samarkan jadi "bukan KTP"
-            let errJson: any = null;
-            try {
-              errJson = await res.clone().json();
-            } catch {}
-            const errMsg =
-              errJson?.message || errJson?.error || `Gagal memindai dokumen (HTTP ${res.status})`;
-            throw new Error(errMsg);
-          }
-        } catch (innerErr: any) {
-          // Teruskan pesan error HTTP jujur dari backend (Vercel serverless, same-origin)
-          throw innerErr instanceof Error
-            ? innerErr
-            : new Error(`Gagal memindai dokumen (HTTP ${lastHttpStatus || "unknown"})`);
+          const alt = await postOnce("/api/scan-document");
+          lastHttpStatus = alt.status;
+          if (alt.ok || alt.status === 429 || alt.status === 403) res = alt;
+        } catch {
+          // pertahankan respons awal
         }
       }
+      // Captcha adaptif: 403 -> ambil token lalu ulangi SEKALI.
+      if (res.status === 403) {
+        const err0 = await readErrorJson(res);
+        if (err0.captchaRequired) {
+          const t = await getTurnstileToken(siteKey);
+          if (t) {
+            formData.set("turnstileToken", t);
+            try {
+              res = await postOnce("/api/ocr");
+            } catch {
+              res = await postOnce("/api/scan-document");
+            }
+            lastHttpStatus = res.status;
+          } else {
+            throw new Error(
+              "Verifikasi manusia diperlukan untuk pemindaian terakhir dan captcha gagal dimuat. Periksa koneksi lalu pindai ulang, atau lanjut via Isi Manual."
+            );
+          }
+        }
+      }
+      if (!res.ok) {
+        const err = await readErrorJson(res);
+        if (!isQuotaFreeCode(err.code)) recordScanAttempt();
+        setCooldown();
+        let msg = err.message || `Gagal memindai dokumen (HTTP ${lastHttpStatus || "unknown"})`;
+        if (res.status === 429 && err.retryAfter > 0) {
+          msg += ` Coba lagi dalam ${formatCountdown(err.retryAfter)}.`;
+        }
+        throw new Error(msg);
+      }
+      recordScanAttempt();
+      setCooldown();
 
       const json = await res.json();
       void lastHttpStatus;
@@ -183,16 +224,17 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
         console.log("Tiket + QR terbit:", ticketCandidate.kode_tiket);
         setCreatedTicket(ticketCandidate);
       } else if (validDoc) {
-        // Fallback agar dokumen VALID tetap dapat QR lokal walau backend/Supabase gangguan
-        // atau NIK tak terbaca (pakai placeholder, petugas verifikasi manual di loket).
+        // Fallback LOKAL bila backend tak mengirim tiket (gangguan/Supabase down).
+        // Ditandai LOCAL- agar jelas belum tersimpan server & tak bisa dilacak online —
+        // warga wajib tunjukkan layar ini + bawa fisik ke loket untuk diterbitkan ulang.
         const fallbackTicket: TicketData = {
-          kode_tiket: "TKT-" + Date.now().toString().slice(-6),
+          kode_tiket: "LOCAL-" + Date.now().toString().slice(-6),
           nik: ocrData.nik || "0000000000000000",
           nama: ocrData.nama || "Warga (Nama tidak terdeteksi)",
           jenis_dokumen: ocrData.jenis_dokumen || "KTP",
           status_verifikasi: ocrData.status_verifikasi || (berhasil ? "BERHASIL" : "BURAM"),
           skor_kejelasan: ocrData.skor_kejelasan ?? 75,
-          catatan: ocrData.catatan || "Dokumen kependudukan terverifikasi otomatis.",
+          catatan: `${ocrData.catatan || "Dokumen kependudukan terverifikasi otomatis."} [QR lokal — belum tersimpan server, tidak bisa dilacak online. Tunjukkan ke petugas untuk diterbitkan tiket resmi.]`,
           created_at: new Date().toISOString(),
         };
         setCreatedTicket(fallbackTicket);
@@ -218,6 +260,13 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
     const allowedTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
     if (!allowedTypes.includes(file.type) && !file.name.match(/\.(jpg|jpeg|png|webp|pdf)$/i)) {
       setError("Format file harus JPG, PNG, WEBP, atau PDF.");
+      return;
+    }
+
+    // Anti-spam: cooldown lokal 30 detik antar-pindaian.
+    const cd = getCooldownSec();
+    if (cd > 0) {
+      setError(`Terlalu cepat mengirim berkas. Tunggu ${formatCountdown(cd)} sebelum memindai lagi.`);
       return;
     }
 
@@ -272,13 +321,13 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
     setCreatedTicket((prev) => {
       if (prev) return { ...prev, nik: clean };
       return {
-        kode_tiket: "TKT-" + Date.now().toString().slice(-6),
+        kode_tiket: "LOCAL-" + Date.now().toString().slice(-6),
         nik: clean,
         nama: updated.nama || "Warga (Nama tidak terdeteksi)",
         jenis_dokumen: updated.jenis_dokumen || "KTP",
         status_verifikasi: updated.status_verifikasi || "BURAM",
         skor_kejelasan: updated.skor_kejelasan ?? 75,
-        catatan: "NIK dikoreksi manual dari fisik KTP. Petugas verifikasi ulang di loket.",
+        catatan: "NIK dikoreksi manual dari fisik KTP. QR lokal — petugas verifikasi ulang di loket.",
         created_at: new Date().toISOString(),
       };
     });
@@ -320,6 +369,9 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
             {fileName ? `File: ${fileName}` : "Klik atau Drag File e-KTP / KK Di Sini"}
           </span>
           <span className="text-[10px] text-slate-400 mt-1">Format JPG, PNG, WEBP, PDF (Maks 10MB)</span>
+          <span className="text-[10px] font-mono text-slate-400 mt-0.5">
+            Kesempatan pindai: {getQuotaState().remaining}/{QUOTA_MAX} per 10 mnt
+          </span>
           <input
             type="file"
             onChange={handleFileUpload}
@@ -339,7 +391,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
 
         {/* Error Message */}
         {error && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl flex items-center gap-2">
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-500 text-xs rounded-xl flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{error}</span>
           </div>
@@ -364,7 +416,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                 }`}
               >
                 {tidakValid && (
-                  <div className="p-3 bg-red-600 text-white text-xs font-semibold rounded-xl flex items-start gap-2">
+                  <div className="p-3 bg-red-500 text-white text-xs font-semibold rounded-xl flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>
                       File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang
@@ -386,7 +438,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                   <span
                     className={`text-xs font-bold px-2.5 py-1 rounded-full border flex items-center gap-1 ${
                       tidakValid
-                        ? "bg-red-100 text-red-800 border-red-200"
+                        ? "bg-red-100 text-red-700 border-red-200"
                         : layak
                           ? "bg-emerald-100 text-emerald-800 border-emerald-200"
                           : "bg-amber-100 text-amber-800 border-amber-200"
@@ -409,7 +461,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                       jenisLabel === "KTP"
                         ? "bg-blue-100 text-blue-800 border-blue-200"
                         : jenisLabel === "LAINNYA"
-                          ? "bg-red-100 text-red-800 border-red-200"
+                          ? "bg-red-100 text-red-700 border-red-200"
                           : "bg-slate-100 text-slate-700 border-slate-200"
                     }`}
                   >
@@ -423,21 +475,21 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                   <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs">
                     <p className="text-slate-400 text-[10px] font-medium">Skor Kejelasan</p>
                     <p
-                      className={`font-bold text-sm ${scanResult.skor_kejelasan >= 70 ? "text-blue-600" : tidakValid ? "text-red-600" : "text-amber-600"}`}
+                      className={`font-bold text-sm ${scanResult.skor_kejelasan >= 70 ? "text-blue-600" : tidakValid ? "text-red-500" : "text-amber-500"}`}
                     >
                       {scanResult.skor_kejelasan || 0}%
                     </p>
                   </div>
                   <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs">
                     <p className="text-slate-400 text-[10px] font-medium">NIK Terdeteksi</p>
-                    <p className="font-bold text-slate-800 font-mono truncate">
+                    <p className="font-bold text-[#0F172A] font-mono truncate">
                       {scanResult.nik ||
                         (scanResult.nik_partial
                           ? `${scanResult.nik_partial} (sebagian)`
                           : "Tidak Terbaca")}
                     </p>
                     {!scanResult.nik && scanResult.nik_partial && (
-                      <p className="text-[10px] text-amber-600 mt-0.5">
+                      <p className="text-[10px] text-amber-500 mt-0.5">
                         Terbaca {String(scanResult.nik_partial).length}/16 digit — foto ulang lebih fokus atau koreksi manual di bawah.
                       </p>
                     )}
@@ -447,7 +499,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                 {scanResult.nama && !tidakValid && (
                   <div className="bg-white px-2.5 py-1.5 rounded-lg border border-slate-100 text-xs flex items-center justify-between">
                     <span className="text-slate-400 text-[10px]">Nama Lengkap:</span>
-                    <span className="font-semibold text-slate-800">{scanResult.nama}</span>
+                    <span className="font-semibold text-[#0F172A]">{scanResult.nama}</span>
                   </div>
                 )}
 
@@ -508,7 +560,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                       </span>
                     </button>
                   ) : tidakValid ? (
-                    <label className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer">
+                    <label className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer">
                       <RefreshCw className="w-4 h-4" />
                       <span>Unggah Ulang Foto e-KTP Asli</span>
                       <input
@@ -563,11 +615,11 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
             {/* Display QR Code */}
             <div className="flex flex-col items-center justify-center p-3 bg-white rounded-xl shadow-md w-fit mx-auto">
               <QRCodeSVG
-                value={createdTicket.kode_tiket}
-                size={130}
+                value={buildTicketQrText(createdTicket)}
+                size={150}
                 bgColor="#FFFFFF"
                 fgColor="#0F172A"
-                level="H"
+                level="M"
               />
               <span className="text-[10px] font-mono font-bold text-slate-700 mt-2">
                 {createdTicket.kode_tiket}

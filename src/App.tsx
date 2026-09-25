@@ -8,13 +8,43 @@ import { Header } from "./components/Header";
 import { Footer } from "./components/Footer";
 import { PortalHome } from "./components/PortalHome";
 import { InteractiveWizard } from "./components/InteractiveWizard";
-import { OfficerDashboard } from "./components/OfficerDashboard";
 import AdminDashboard from "./components/AdminDashboard";
 import { RequirementModal } from "./components/RequirementModal";
 import { TicketStatusModal } from "./components/TicketStatusModal";
 import OfficerLoginModal from "./components/OfficerLoginModal";
 import FloatingVeriBot from "./components/FloatingVeriBot";
+import { ExitDashboardConfirmModal } from "./components/ExitDashboardConfirmModal";
 import { Ticket, ServiceCatalogItem, PreScreenInitialData } from "./types";
+
+type AppView = "portal" | "wizard" | "login" | "officer";
+
+interface PendingNav {
+  view: AppView;
+  targetId?: string;
+  destLabel?: string;
+}
+
+function getOfficerName(): string {
+  try {
+    const raw = localStorage.getItem("aipex_officer");
+    if (!raw) return "";
+    const o = JSON.parse(raw) as { nama?: string };
+    return typeof o?.nama === "string" ? o.nama : "";
+  } catch {
+    return "";
+  }
+}
+
+function scrollToTarget(targetId?: string) {
+  if (!targetId || targetId === "portalView") {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  // Portal butuh 1 frame render sebelum scroll ke section.
+  setTimeout(() => {
+    document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth" });
+  }, 150);
+}
 
 export default function App() {
   const [currentView, setCurrentView] = useState<"portal" | "wizard" | "login" | "officer">("portal");
@@ -23,11 +53,28 @@ export default function App() {
   const [selectedRequirementService, setSelectedRequirementService] = useState<ServiceCatalogItem | null>(null);
   const [statusModalTicket, setStatusModalTicket] = useState<Ticket | null>(null);
   const [preScreenData, setPreScreenData] = useState<PreScreenInitialData | null>(null);
+  // Guard keluar dashboard: semua navigasi portal/wizard saat mode officer
+  // wajib lewat requestNavigate agar muncul popup konfirmasi (sesi tetap disimpan).
+  const [exitConfirm, setExitConfirm] = useState<PendingNav | null>(null);
 
-  // Load initial tickets from backend
+  const doNavigate = (view: AppView, targetId?: string) => {
+    setCurrentView(view);
+    if (view === "portal" || view === "wizard") scrollToTarget(targetId);
+    else window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const requestNavigate = (view: AppView, targetId?: string, destLabel?: string) => {
+    if (currentView === "officer" && view !== "officer") {
+      setExitConfirm({ view, targetId, destLabel: destLabel || "Portal Warga" });
+      return;
+    }
+    doNavigate(view, targetId);
+  };
+
+  // Load initial tickets from backend (jalur publik; /api/admin/* kini wajib Bearer).
   const fetchTickets = async () => {
     try {
-      const response = await fetch("/api/admin/tickets");
+      const response = await fetch("/api/tickets");
       const resJson = await response.json();
       if (resJson.success && Array.isArray(resJson.data) && resJson.data.length > 0) {
         const mapped = resJson.data.map((row: any) => {
@@ -66,17 +113,7 @@ export default function App() {
         return;
       }
     } catch (err) {
-      console.warn("Could not fetch tickets from /api/admin/tickets, trying fallback:", err);
-    }
-
-    try {
-      const response = await fetch("/api/tickets");
-      const resJson = await response.json();
-      if (resJson.success && Array.isArray(resJson.data)) {
-        setTickets(resJson.data);
-      }
-    } catch (err) {
-      console.warn("Could not fetch tickets from backend, using fallback state:", err);
+      console.warn("Could not fetch tickets from /api/tickets:", err);
     }
   };
 
@@ -144,87 +181,21 @@ export default function App() {
     setTickets((prev) => [newTicket, ...prev]);
   };
 
-
-  // Update Ticket Status by Officer (1-Click Action via /api/admin/tickets)
-  const handleUpdateTicketStatus = async (
-    ticketId: string,
-    status: "APPROVED" | "REJECTED" | "REVISI" | "PENDING",
-    notes?: string,
-    officerId: string = "off-001"
-  ) => {
-    try {
-      const response = await fetch("/api/admin/tickets", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticketId,
-          officerId,
-          status,
-          catatan: notes,
-        }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        setTickets((prev) =>
-          prev.map((t) =>
-            t.id === ticketId || t.ticket_code === ticketId
-              ? {
-                  ...t,
-                  status_verifikasi: status,
-                  catatan_petugas: notes || t.catatan_petugas,
-                  updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
-                }
-              : t
-          )
-        );
-        return;
-      }
-    } catch (adminErr) {
-      console.warn("Failed /api/admin/tickets patch, falling back:", adminErr);
-    }
-
-    try {
-      const response = await fetch(`/api/tickets/${ticketId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status_verifikasi: status,
-          catatan_petugas: notes,
-        }),
-      });
-      const data = await response.json();
-      if (data.success && data.data) {
-        setTickets((prev) =>
-          prev.map((t) => (t.id === ticketId || t.ticket_code === ticketId ? data.data : t))
-        );
-      }
-    } catch (err) {
-      console.error("Failed to update status on server, updating locally:", err);
-      setTickets((prev) =>
-        prev.map((t) =>
-          t.id === ticketId || t.ticket_code === ticketId
-            ? {
-                ...t,
-                status_verifikasi: status,
-                catatan_petugas: notes || t.catatan_petugas,
-                updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
-              }
-            : t
-        )
-      );
-    }
-  };
-
-  const pendingCount = tickets.filter((t) => t.status_verifikasi === "PENDING").length;
+  // Sinkron dengan AdminDashboard: semua yang butuh verifikasi petugas.
+  const pendingCount = tickets.filter((t) =>
+    ["PENDING", "BERHASIL", "BURAM", "REVISI", "PERLU_PERBAIKAN"].includes(String(t.status_verifikasi || "").toUpperCase())
+  ).length;
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] flex flex-col justify-between text-slate-800 antialiased selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-[#f8fafc] flex flex-col justify-between text-[#0F172A] antialiased selection:bg-blue-600 selection:text-white">
       {/* Official Header */}
       <Header
         currentView={currentView}
         onNavigate={(view) => {
-          setCurrentView(view);
-          window.scrollTo({ top: 0, behavior: "smooth" });
+          requestNavigate(view);
+        }}
+        onRequestNav={(view, targetId, destLabel) => {
+          requestNavigate(view, targetId, destLabel);
         }}
         pendingCount={pendingCount}
       />
@@ -272,8 +243,10 @@ export default function App() {
       {/* Official Footer */}
       <Footer
         onNavigateHome={() => {
-          setCurrentView("portal");
-          window.scrollTo({ top: 0, behavior: "smooth" });
+          requestNavigate("portal", "portalView", "Katalog Layanan");
+        }}
+        onRequestNav={(targetId, destLabel) => {
+          requestNavigate("portal", targetId, destLabel);
         }}
       />
 
@@ -308,6 +281,17 @@ export default function App() {
 
       {/* Floating 24/7 AI Chatbot Popup (Default: Minimized, 1:1 Circle Floating Bubble) */}
       <FloatingVeriBot />
+
+      <ExitDashboardConfirmModal
+        isOpen={Boolean(exitConfirm)}
+        officerName={getOfficerName()}
+        destLabel={exitConfirm?.destLabel || "Portal Warga"}
+        onCancel={() => setExitConfirm(null)}
+        onConfirm={() => {
+          if (exitConfirm) doNavigate(exitConfirm.view, exitConfirm.targetId);
+          setExitConfirm(null);
+        }}
+      />
     </div>
   );
 }

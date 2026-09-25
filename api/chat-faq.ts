@@ -1,4 +1,5 @@
 import { readJsonBody, setCors } from "./_lib/http";
+import { checkSimpleRateLimit, CHAT_10MIN } from "./_lib/rate-limit";
 import { extractNaraApiKey, getGeminiClient, isNaraConfigured } from "./_lib/store";
 import { chatCompletionViaNaraRoute } from "../services/ai_providers";
 
@@ -31,8 +32,8 @@ function getOfflineFaqAnswer(text: string): string {
   if (lower.includes("rt") || lower.includes("rw") || lower.includes("pengantar")) {
     return "📜 Sesuai amanat **Perpres No. 96 Tahun 2018**, pengurusan dokumen kependudukan dasar (seperti KTP-EL baru/rusak/hilang, Akta Kelahiran, dan pembaruan KK) **tidak lagi memerlukan surat pengantar RT/RW** sepanjang NIK sudah terdaftar aktif di Ditjen Dukcapil.";
   }
-  if (lower.includes("pdp") || lower.includes("privasi") || lower.includes("aman") || lower.includes("ram") || lower.includes("keamanan")) {
-    return "🛡️ **Kepatuhan Privasi UU PDP (UU No. 27 Tahun 2022):**\nSeluruh berkas foto e-KTP dan KK yang diunggah warga diproses murni di memori sementara (In-Memory RAM) dan otomatis dihapus saat analisis selesai. Sistem tidak menyimpan foto dokumen ke hard disk/database.";
+  if (lower.includes("pdp") || lower.includes("privasi") || lower.includes("aman") || lower.includes("ram") || lower.includes("keamanan") || lower.includes("hapus") || lower.includes("purge")) {
+    return "🛡️ **Kepatuhan Privasi UU PDP (UU No. 27 Tahun 2022):**\nFoto e-KTP/KK warga disimpan SEMENTARA terenkripsi di penyimpanan privat — hanya terlihat petugas dan pemilik tiket — lalu dihapus otomatis (purge) seketika tiket disetujui/ditolak. Foto tiket terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen (KTP/KK/AKTA) untuk rekap.";
   }
   if (lower.includes("lokasi") || lower.includes("alamat") || lower.includes("kantor") || lower.includes("kontak") || lower.includes("telepon") || lower.includes("whatsapp") || lower.includes("wa")) {
     return "📍 **Kantor Kelurahan Sukamaju:**\n• **Alamat:** Jl. Praja Abdi No. 45, Kecamatan Maju Sejahtera\n• **WhatsApp / Call Center:** +62 811-2345-6789\n• **Email Resmi:** layanan@sukamaju.desa.id\n• **Website / VeriBot:** 24 Jam Mandiri Online";
@@ -59,9 +60,9 @@ Informasi Resmi Kelurahan Sukamaju:
 - Akta Perkawinan: Surat nikah keagamaan, KTP suami istri, KK, pasfoto berdampingan.
 - Surat Pindah (SKPWNI): KK asli, KTP pemohon, form permohonan pindah.
 - Jalur Khusus Fast-Track: Warga yang berkasnya lulus pra-pemeriksaan AI (skor minimal 75%) akan memperoleh Tiket QR Prioritas. Saat ke kantor kelurahan, cukup tunjukkan QR Tiket di loket tanpa perlu antre panjang manual atau mengisi form kertas lagi.
-- UU PDP Compliance: Seluruh foto dokumen kependudukan diproses hanya dalam memori server (RAM) dan langsung dihapus otomatis (auto-purge). Tidak ada foto yang disimpan di hard disk.
+- UU PDP Compliance: Foto dokumen disimpan sementara terenkripsi di penyimpanan privat (terlihat petugas + pemilik tiket), dihapus otomatis (purge) seketika tiket disetujui/ditolak; foto terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen (KTP/KK/AKTA) untuk rekap.
 
-Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf).`;
+Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf). Pisahkan tiap paragraf dengan satu baris kosong. Pakai **tebal** untuk istilah penting dan daftar "•" untuk rincian (maksimal 5 butir).`;
 
 export default async function handler(req: any, res: any) {
   if (setCors(req, res)) return;
@@ -73,6 +74,17 @@ export default async function handler(req: any, res: any) {
     } catch {}
     const { message } = body;
     if (!message) return res.status(400).json({ success: false, message: "Pesan tidak boleh kosong." });
+
+    // Anti-spam: batasi chat agar token tidak diboroskan bot (10x/10 mnt/IP).
+    const chatRl = await checkSimpleRateLimit(req, CHAT_10MIN);
+    if (!chatRl.allowed) {
+      return res.status(429).json({
+        success: false,
+        code: "RATE_LIMITED",
+        message: `Terlalu banyak pertanyaan dalam waktu singkat. Coba lagi dalam ${Math.ceil(chatRl.retryAfterSec / 60)} menit.`,
+        retryAfter: chatRl.retryAfterSec,
+      });
+    }
 
     const client = getGeminiClient();
     const naraApiKey = extractNaraApiKey({ headers: req.headers, body });

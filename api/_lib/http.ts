@@ -15,10 +15,6 @@ export function setCors(req: any, res: any): boolean {
   return false;
 }
 
-export function sendJson(res: any, status: number, payload: unknown) {
-  res.status(status).json(payload);
-}
-
 /** Baca JSON body —兼容 Vercel bodyParser on/off. */
 export async function readJsonBody(req: any): Promise<any> {
   if (req.body !== undefined && req.body !== null) {

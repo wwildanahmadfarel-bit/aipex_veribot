@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { KeyRound, ShieldCheck, AlertCircle, ArrowRight, X } from 'lucide-react';
 
 interface OfficerLoginProps {
-  onLoginSuccess: (officerData: { id: string; nama: string; role: string }) => void;
+  onLoginSuccess: (officerData: { id: string; nama: string; role: string; token?: string }) => void;
   onClose?: () => void;
 }
 
@@ -14,15 +14,6 @@ function normalizeAccessCode(raw: string): string {
     .replace(/-+/g, '-')
     .replace(/SUKAMAZU/g, 'SUKAMAJU');
 }
-
-// Fallback client-side agar login tetap bisa saat API mati / dijalankan via `vite preview`
-// (disamakan dengan server.ts). Kunci dinormalisasi.
-const OFFLINE_OFFICERS: Record<string, { id: string; nama: string; role: string }> = {
-  'ADM-SUKAMAJU-2026': { id: 'off-001', nama: 'Bambang Sudiro, S.STP', role: 'Kepala Seksi Pelayanan Kependudukan' },
-  '849201': { id: 'off-002', nama: 'Siti Rahmawati, S.AP', role: 'Petugas Loket 1 - e-KTP & Identitas' },
-  'VERIBOT-ADMIN': { id: 'off-003', nama: 'Ahmad Fauzi, S.Kom', role: 'Supervisor VeriBot AI Kependudukan' },
-  'LOKET-SUKAMAJU-01': { id: 'off-004', nama: 'Hendra Setiawan, S.IP', role: 'Petugas Loket Fast-Track VeriBot AIPEX' },
-};
 
 export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLoginProps) {
   const [kodeAkses, setKodeAkses] = useState('');
@@ -43,12 +34,14 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
 
     // Cegah kesalahan umum: kode tiket warga dipakai untuk login petugas
     if (/^(TKT|FT)-/.test(normalized)) {
-      setErrorMsg('Itu kode tiket warga (TKT-...), bukan kode akses petugas. Kode tiket dipakai di menu "Lacak Status", sedangkan login petugas memakai kode akses seperti 849201.');
+      setErrorMsg('Itu kode tiket warga (TKT-...), bukan kode akses petugas. Minta kode akses ke admin kelurahan.');
       setLoading(false);
       return;
     }
 
     try {
+      // Verifikasi SELALU server-side. Tanpa backend tidak ada login
+      // (kode fallback client sengaja dihapus agar tidak bocor di repo).
       let res: Response;
       try {
         res = await fetch('/api/admin/login', {
@@ -57,25 +50,12 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
           body: JSON.stringify({ kodeAkses: normalized })
         });
       } catch (networkErr: any) {
-        // Server tidak terjangkau -> coba fallback offline
-        const offline = OFFLINE_OFFICERS[normalized];
-        if (offline) {
-          try { localStorage.setItem('aipex_officer', JSON.stringify(offline)); } catch {}
-          onLoginSuccess(offline);
-          return;
-        }
-        throw new Error('Tidak bisa terhubung ke server (fetch gagal). Jalankan dengan `npm run dev` lalu coba lagi, atau gunakan kode offline: 849201.');
+        throw new Error('Tidak bisa terhubung ke server. Jalankan dengan `npm run dev` lalu coba lagi.');
       }
 
       // Tangani 404 HTML (mis. dijalankan via `vite preview` tanpa backend Express)
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
-        const offline = OFFLINE_OFFICERS[normalized];
-        if (offline) {
-          try { localStorage.setItem('aipex_officer', JSON.stringify(offline)); } catch {}
-          onLoginSuccess(offline);
-          return;
-        }
         throw new Error('Endpoint /api/admin/login tidak ditemukan (dapat HTML, bukan JSON). Jalankan server dengan `npm run dev` (tsx server.ts port 3000), jangan `vite preview` saja.');
       }
 
@@ -85,20 +65,24 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
       }
 
       if (!res.ok || !result.success) {
-        // Jika server menolak tapi kode ada di fallback offline, tetap izinkan (mode toleran)
-        const offline = OFFLINE_OFFICERS[normalized];
-        if (offline && (res.status === 401 || res.status === 500)) {
-          try { localStorage.setItem('aipex_officer', JSON.stringify(offline)); } catch {}
-          onLoginSuccess(offline);
-          return;
+        if (res.status === 429) {
+          const wait = Number((result as any)?.retryAfter || 0);
+          throw new Error(
+            `Terlalu banyak percobaan login.${wait > 0 ? ` Coba lagi dalam ${wait} detik.` : ' Coba lagi beberapa menit.'}`
+          );
         }
-        throw new Error(result.message || 'Kode akses tidak valid. Contoh valid: 849201 atau LOKET-SUKAMAJU-01.');
+        throw new Error(result.message || 'Kode akses tidak valid.');
       }
 
-      // Simpan session petugas ke localStorage
-      if (result.officer) {
-        try { localStorage.setItem('aipex_officer', JSON.stringify(result.officer)); } catch {}
-        onLoginSuccess(result.officer);
+      // Simpan session petugas + token JWT ke localStorage.
+      // Kasus officer ada tapi token kosong = backend lama (belum redeploy/restart)
+      // atau OFFICER_JWT_SECRET belum diisi — bukan salah kode akses.
+      if (result.officer && result.token) {
+        const session = { ...result.officer, token: result.token };
+        try { localStorage.setItem('aipex_officer', JSON.stringify(session)); } catch {}
+        onLoginSuccess(session);
+      } else if (result.officer && !result.token) {
+        throw new Error('Server belum mengeluarkan token sesi (OFFICER_JWT_SECRET kosong atau server belum di-restart/redeploy). Hubungi admin server.');
       } else {
         throw new Error('Data profil petugas tidak ditemukan');
       }
@@ -108,11 +92,6 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickCode = (code: string) => {
-    setKodeAkses(code);
-    setErrorMsg('');
   };
 
   return (
@@ -147,14 +126,14 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
             <ShieldCheck className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="font-bold text-base text-slate-800">Login Petugas Kelurahan</h3>
+            <h3 className="font-bold text-base text-[#0F172A]">Login Petugas Kelurahan</h3>
             <p className="text-xs text-slate-500">Masukkan Kode Akses Khusus Petugas AIPEX</p>
           </div>
         </div>
 
         {/* ERROR ALERT */}
         {errorMsg && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2 text-xs text-rose-700 font-medium">
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
@@ -172,13 +151,13 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
                 type="password"
                 value={kodeAkses}
                 onChange={(e) => setKodeAkses(e.target.value)}
-                placeholder="Contoh: LOKET-SUKAMAJU-01"
+                placeholder="Masukkan kode akses petugas"
                 required
                 autoFocus
                 autoCapitalize="characters"
                 autoCorrect="off"
                 spellCheck={false}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 text-slate-800 text-sm font-mono border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition uppercase"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 text-[#0F172A] text-sm font-mono border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition uppercase"
               />
               <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
             </div>
@@ -203,27 +182,7 @@ export default function OfficerLoginModal({ onLoginSuccess, onClose }: OfficerLo
 
         <div className="pt-2 border-t border-slate-100 flex flex-col items-center gap-1.5 text-center">
           <p className="text-[11px] text-slate-400">
-            Uji Coba Kode:{" "}
-            <button
-              type="button"
-              onClick={() => handleQuickCode('LOKET-SUKAMAJU-01')}
-              className="bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded text-slate-700 font-mono text-[11px] underline cursor-pointer transition"
-              title="Klik untuk mengisi otomatis"
-            >
-              LOKET-SUKAMAJU-01
-            </button>
-            {" atau "}
-            <button
-              type="button"
-              onClick={() => handleQuickCode('849201')}
-              className="bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded text-slate-700 font-mono text-[11px] underline cursor-pointer transition"
-              title="Klik untuk mengisi otomatis"
-            >
-              849201
-            </button>
-          </p>
-          <p className="text-[10px] text-slate-400">
-            Kode tiket warga (TKT-...) dipakai di menu Lacak Status, bukan di sini.
+            Minta kode akses ke admin kelurahan. Kode tiket warga (TKT-...) dipakai di menu Lacak Status, bukan di sini.
           </p>
         </div>
 

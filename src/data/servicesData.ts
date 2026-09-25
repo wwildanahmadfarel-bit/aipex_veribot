@@ -21,6 +21,11 @@ export const catalogServices: ServiceCatalogItem[] = [
         mandatory: true,
       },
       {
+        title: "Kutipan Akta Kelahiran",
+        description: "Wajib untuk penerbitan baru; untuk penggantian dilampirkan bila ada.",
+        mandatory: true,
+      },
+      {
         title: "Surat Pengantar RT/RW",
         description: "Opsional jika sudah sinkron di Dukcapil (Perpres 96/2018).",
         mandatory: false,

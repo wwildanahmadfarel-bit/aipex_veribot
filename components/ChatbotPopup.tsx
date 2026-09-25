@@ -1,2 +1,2 @@
 "use client";
-export { default } from "../src/components/ChatbotPopup";
+export { default } from "../src/components/FloatingVeriBot";

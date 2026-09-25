@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+@theme {
+  /* Brand AIPEX — satu sumber kebenaran palet (lihat tabel brand di docs). */
+  --color-brand: #2563eb;
+  --color-brand-hover: #1d4ed8;
+  --color-brand-soft: #eff6ff;
+  --color-navy: #1e293b;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+  --color-line: #e2e8f0;
+  --color-appbg: #f8fafc;
+  --color-ok: #10b981;
+  --color-ok-soft: #ecfdf5;
+  --color-ok-dark: #047857;
+  --color-danger: #ef4444;
+  --color-danger-soft: #fef2f2;
+  --color-danger-dark: #b91c1c;
+  --color-warn: #f59e0b;
+  --color-warn-soft: #fffbeb;
+  --color-warn-dark: #b45309;
+}
+
 @keyframes scan-beam {
   0% { top: 0%; opacity: 0.8; }
   50% { top: 92%; opacity: 1; }
@@ -12,12 +33,12 @@
 
 /* Custom styles for tabular numbers in citizen tickets */
 .font-code-num {
-  font-family: 'Inter', monospace;
+  font-family: 'Poppins', monospace;
   font-variant-numeric: tabular-nums;
 }
 
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: 'Poppins', sans-serif;
 }
 
 h1, h2, h3, .font-heading {

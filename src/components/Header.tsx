@@ -5,6 +5,8 @@ import { AipexLogo } from "./AipexLogo";
 interface HeaderProps {
   currentView: "portal" | "wizard" | "login" | "officer";
   onNavigate: (view: "portal" | "wizard" | "login" | "officer") => void;
+  /** Navigasi terjaga: App menampilkan popup konfirmasi bila sedang mode officer. */
+  onRequestNav?: (view: "portal" | "wizard" | "login" | "officer", targetId?: string, destLabel?: string) => void;
   pendingCount?: number;
 }
 
@@ -21,12 +23,13 @@ const NAV_ITEMS: NavItem[] = [
   { id: "faq", label: "Bantuan & FAQ", targetId: "faqSection" },
 ];
 
-export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pendingCount = 4 }) => {
+export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onRequestNav, pendingCount = 0 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("beranda");
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Tanggal real-time (format Indonesia: "Rabu, 16 September 2026")
+  // Tanggal real-time (format Indonesia: "Rabu, 16 September 2026";
+  // versi pendek "16 Sep 2026" untuk layar HP agar banner tidak terpotong)
   const formatToday = () =>
     new Intl.DateTimeFormat("id-ID", {
       weekday: "long",
@@ -34,10 +37,20 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
       month: "long",
       year: "numeric",
     }).format(new Date());
+  const formatTodayShort = () =>
+    new Intl.DateTimeFormat("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(new Date());
   const [today, setToday] = useState<string>(formatToday);
+  const [todayShort, setTodayShort] = useState<string>(formatTodayShort);
 
   useEffect(() => {
-    const timer = setInterval(() => setToday(formatToday()), 30_000);
+    const timer = setInterval(() => {
+      setToday(formatToday());
+      setTodayShort(formatTodayShort());
+    }, 30_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -76,22 +89,37 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
     }
   }, [currentView]);
 
+  const requestNav = (
+    view: "portal" | "wizard" | "login" | "officer",
+    targetId?: string,
+    destLabel?: string
+  ) => {
+    if (onRequestNav) {
+      onRequestNav(view, targetId, destLabel);
+      return;
+    }
+    onNavigate(view);
+  };
+
   const handleNavClick = (item: NavItem) => {
     setActiveTab(item.id);
-    if (currentView !== "portal") {
-      onNavigate("portal");
-      setTimeout(() => {
+    // Scroll ditangani App setelah konfirmasi (agar tidak jalan sebelum user tekan Ya).
+    requestNav("portal", item.targetId, item.label);
+    if (!onRequestNav) {
+      if (currentView !== "portal") {
+        setTimeout(() => {
+          if (item.id === "beranda") {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          } else {
+            document.getElementById(item.targetId)?.scrollIntoView({ behavior: "smooth" });
+          }
+        }, 120);
+      } else {
         if (item.id === "beranda") {
           window.scrollTo({ top: 0, behavior: "smooth" });
         } else {
           document.getElementById(item.targetId)?.scrollIntoView({ behavior: "smooth" });
         }
-      }, 120);
-    } else {
-      if (item.id === "beranda") {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      } else {
-        document.getElementById(item.targetId)?.scrollIntoView({ behavior: "smooth" });
       }
     }
   };
@@ -107,25 +135,28 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
   }, []);
 
   return (
-    <header className="sticky top-0 z-50 shadow-sm border-b border-[#213145]">
+    <header className="sticky top-0 z-50 shadow-sm border-b border-[#1E293B]">
       {/* Top Banner Row */}
-      <div className="w-full whitespace-nowrap overflow-hidden px-4 py-1.5 bg-[#0b1c30] border-b border-[#213145]">
-        <div className="max-w-[1200px] mx-auto flex items-center justify-between w-full text-[11px] whitespace-nowrap">
-          <div className="flex items-center gap-2 shrink-0">
+      <div className="w-full overflow-hidden px-4 py-1.5 bg-[#1E293B] border-b border-[#1E293B]">
+        <div className="max-w-[1200px] mx-auto flex items-center justify-between gap-2 w-full text-[11px]">
+          <div className="flex items-center gap-2 min-w-0">
             <span className="w-2 h-2 rounded-full bg-[#10b981] animate-ping inline-block shrink-0"></span>
-            <span className="text-xs font-medium text-slate-200 whitespace-nowrap">
+            <span className="text-xs font-medium text-slate-200 whitespace-nowrap truncate">
               Portal Resmi Kelurahan Sukamaju
             </span>
-            <span className="text-[#737686]">•</span>
-            <span className="font-code-num text-slate-300 bg-[#213145] px-2 py-0.5 rounded text-[10px] whitespace-nowrap">
+            <span className="text-slate-500 hidden min-[400px]:inline">•</span>
+            <span className="font-code-num text-slate-300 bg-[#1E293B] px-2 py-0.5 rounded text-[10px] whitespace-nowrap hidden min-[400px]:inline">
               {today}
+            </span>
+            <span className="font-code-num text-slate-300 bg-[#1E293B] px-2 py-0.5 rounded text-[10px] whitespace-nowrap min-[400px]:hidden">
+              {todayShort}
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-slate-300 text-[11px] hidden sm:inline whitespace-nowrap">
               Dashboard Layanan Warga
             </span>
-            <span className="font-code-num bg-[#2563eb] text-white font-bold text-[9px] px-2 py-0.5 rounded-full tracking-wider whitespace-nowrap shadow-xs">
+            <span className="font-code-num bg-[#2563eb] text-white font-bold text-[9px] px-2 py-0.5 rounded-full tracking-wider whitespace-nowrap shadow-xs hidden min-[400px]:inline">
               VERIBOT AI V1.0
             </span>
           </div>
@@ -133,15 +164,15 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
       </div>
 
       {/* Main Brand Bar */}
-      <div className="bg-[#213145] border-b border-[#213145]/80 py-2.5 px-4">
+      <div className="bg-[#1E293B] border-b border-[#1E293B]/80 py-2.5 px-4">
         <div className="max-w-[1200px] mx-auto flex items-center justify-between w-full">
           {/* Logo & Title */}
           <div
             className="flex items-center gap-3 cursor-pointer group select-none"
             onClick={() => {
               setActiveTab("beranda");
-              onNavigate("portal");
-              window.scrollTo({ top: 0, behavior: "smooth" });
+              requestNav("portal", "portalView", "Beranda / Katalog");
+              if (!onRequestNav) window.scrollTo({ top: 0, behavior: "smooth" });
             }}
             id="brandLogoBtn"
           >
@@ -162,7 +193,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
           </div>
 
           {/* Center Navigation for Desktop with Sliding Active Navbar Indicator */}
-          <nav className="hidden lg:flex items-center gap-1 bg-[#0b1c30]/60 p-1.5 rounded-xl border border-slate-700/50 backdrop-blur-xs relative">
+          <nav className="hidden lg:flex items-center gap-1 bg-[#1E293B]/60 p-1.5 rounded-xl border border-slate-700/50 backdrop-blur-xs relative">
             {NAV_ITEMS.map((item) => {
               const isActive = activeTab === item.id;
               return (
@@ -197,9 +228,9 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
               <button
                 onClick={() => {
                   setActiveTab("beranda");
-                  onNavigate("portal");
+                  requestNav("portal", "portalView", "Portal Warga (Keluar Loket)");
                 }}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600/20 text-red-300 border border-red-500/30 hover:bg-red-600/30 text-xs font-semibold transition-colors cursor-pointer"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 text-xs font-semibold transition-colors cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">logout</span>
                 <span>Keluar Loket</span>
@@ -207,7 +238,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
             ) : (
               <button
                 onClick={() => onNavigate("login")}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0b1c30]/70 text-blue-300 border border-[#2563eb]/40 hover:bg-[#2563eb]/20 text-xs font-semibold transition-colors cursor-pointer"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1E293B]/70 text-blue-300 border border-[#2563eb]/40 hover:bg-[#2563eb]/20 text-xs font-semibold transition-colors cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px] text-[#2563eb]">shield</span>
                 <span>Login Petugas</span>
@@ -224,7 +255,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
               id="kebab-menu-btn"
               onClick={() => setMenuOpen(!menuOpen)}
               type="button"
-              className="w-9 h-9 rounded-lg bg-[#0b1c30]/60 hover:bg-[#0b1c30] text-white flex items-center justify-center border border-[#213145] transition-colors relative cursor-pointer"
+              className="w-9 h-9 rounded-lg bg-[#1E293B]/60 hover:bg-[#1E293B] text-white flex items-center justify-center border border-[#1E293B] transition-colors relative cursor-pointer"
             >
               <span className="material-symbols-outlined text-[20px]">more_vert</span>
             </button>
@@ -233,7 +264,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
             {menuOpen && (
               <div
                 id="kebab-dropdown-menu"
-                className="absolute right-0 top-11 w-64 bg-[#213145] border border-slate-700 rounded-xl shadow-2xl p-2 z-50 text-left animate-in fade-in zoom-in-95 duration-150"
+                className="absolute right-0 top-11 w-64 bg-[#1E293B] border border-slate-700 rounded-xl shadow-2xl p-2 z-50 text-left animate-in fade-in zoom-in-95 duration-150"
               >
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-3 py-1.5">
                   Menu Loket & Akun
@@ -257,12 +288,14 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
                   onClick={() => {
                     setMenuOpen(false);
                     setActiveTab("tiket");
-                    onNavigate("portal");
-                    setTimeout(() => {
-                      document.getElementById("lacakSection")?.scrollIntoView({ behavior: "smooth" });
-                    }, 100);
+                    requestNav("portal", "lacakSection", "Cek Tiket QR");
+                    if (!onRequestNav) {
+                      setTimeout(() => {
+                        document.getElementById("lacakSection")?.scrollIntoView({ behavior: "smooth" });
+                      }, 100);
+                    }
                   }}
-                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-medium text-slate-300 hover:bg-[#0b1c30]/40 hover:text-white rounded-lg transition-colors cursor-pointer text-left"
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-medium text-slate-300 hover:bg-[#1E293B]/40 hover:text-white rounded-lg transition-colors cursor-pointer text-left"
                 >
                   <span className="material-symbols-outlined text-[18px] text-slate-400">person</span>
                   <span>Lacak Berkas Mandiri</span>
@@ -273,12 +306,14 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, pending
                   onClick={() => {
                     setMenuOpen(false);
                     setActiveTab("faq");
-                    onNavigate("portal");
-                    setTimeout(() => {
-                      document.getElementById("faqSection")?.scrollIntoView({ behavior: "smooth" });
-                    }, 100);
+                    requestNav("portal", "faqSection", "Bantuan & FAQ");
+                    if (!onRequestNav) {
+                      setTimeout(() => {
+                        document.getElementById("faqSection")?.scrollIntoView({ behavior: "smooth" });
+                      }, 100);
+                    }
                   }}
-                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-medium text-slate-300 hover:bg-[#0b1c30]/40 hover:text-white rounded-lg transition-colors cursor-pointer text-left"
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-medium text-slate-300 hover:bg-[#1E293B]/40 hover:text-white rounded-lg transition-colors cursor-pointer text-left"
                 >
                   <span className="material-symbols-outlined text-[18px] text-slate-400">help</span>
                   <span>Bantuan & Panduan</span>

@@ -18,7 +18,7 @@ export const RequirementModal: React.FC<RequirementModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b1c30]/70 backdrop-blur-xs p-4 animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E293B]/70 backdrop-blur-xs p-4 animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div
@@ -48,7 +48,9 @@ export const RequirementModal: React.FC<RequirementModalProps> = ({
         <div className="p-6 flex flex-col gap-4">
           <p className="text-sm text-slate-600 leading-relaxed">
             Sebelum mendatangi loket atau mengunggah berkas secara mandiri, pastikan Anda telah
-            menyiapkan dokumen asli berikut:
+            menyiapkan dokumen asli berikut. Seluruh dokumen bertanda{" "}
+            <strong className="text-red-700">WAJIB</strong> harus diunggah satu per satu pada
+            Langkah 2 pengajuan — tanpa lengkap, pemindaian AI tidak dapat dimulai.
           </p>
 
           <div className="space-y-3">
@@ -66,7 +68,7 @@ export const RequirementModal: React.FC<RequirementModalProps> = ({
                     {req.mandatory ? "check_circle" : "info"}
                   </span>
                   <div className="flex flex-col">
-                    <span className="text-xs font-bold text-slate-800">{req.title}</span>
+                    <span className="text-xs font-bold text-[#0F172A]">{req.title}</span>
                     <span className="text-[11px] text-slate-500 mt-0.5">{req.description}</span>
                   </div>
                 </div>

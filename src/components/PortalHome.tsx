@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ServiceCatalogItem, Ticket, PreScreenInitialData } from "../types";
+import { ServiceCatalogItem, PreScreenInitialData } from "../types";
 import { catalogServices } from "../data/servicesData";
 import { OcrPreScreenCard } from "./OcrPreScreenCard";
 
@@ -19,6 +19,9 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [ticketSearchInput, setTicketSearchInput] = useState<string>("");
+
+  const countBy = (cat: string) =>
+    cat === "all" ? catalogServices.length : catalogServices.filter((s) => s.category === cat).length;
 
   const filteredServices = catalogServices.filter((service) => {
     const matchCategory = activeCategory === "all" || service.category === activeCategory;
@@ -69,11 +72,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-1">
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-xs text-white backdrop-blur-xs">
               <span className="material-symbols-outlined text-[16px] text-emerald-300">security</span>
-              reCAPTCHA v3 Protected
-            </span>
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-xs text-white backdrop-blur-xs">
-              <span className="material-symbols-outlined text-[16px] text-blue-200">badge</span>
-              IKD Integrated
+              Rate-Limit Protected
             </span>
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 text-xs text-white backdrop-blur-xs">
               <span className="material-symbols-outlined text-[16px] text-emerald-300">dns</span>
@@ -122,7 +121,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
                   setTicketSearchInput("TKT-202609-8410");
                   onCheckTicket("TKT-202609-8410");
                 }}
-                className="font-code-num text-red-600 hover:underline font-semibold cursor-pointer"
+                className="font-code-num text-red-500 hover:underline font-semibold cursor-pointer"
               >
                 TKT-202609-8410
               </button>{" "}
@@ -179,7 +178,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
           </div>
           <div className="text-[11px] sm:text-xs text-slate-500 flex items-center gap-1.5">
             <span className="material-symbols-outlined text-[16px] text-emerald-600">verified_user</span>
-            <span>Uji Coba Cepat Tanpa Perlu Berkas Asli</span>
+            <span>Hasil real-time dari AI — gunakan berkas asli</span>
           </div>
         </div>
 
@@ -305,10 +304,13 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
               <button
                 type="button"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2.5 w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer transition-colors"
+                aria-label="Hapus pencarian"
+                className="absolute right-1 w-11 h-11 rounded-full text-slate-500 flex items-center justify-center cursor-pointer transition-colors active:bg-slate-200"
                 title="Hapus pencarian"
               >
-                <span className="material-symbols-outlined text-[15px]">close</span>
+                <span className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[15px]">close</span>
+                </span>
               </button>
             )}
           </div>
@@ -326,7 +328,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
             >
               <span>Semua Layanan</span>
               <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${activeCategory === "all" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}>
-                8
+                {countBy("all")}
               </span>
             </button>
             <button
@@ -340,7 +342,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
             >
               <span>Dokumen Identitas</span>
               <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${activeCategory === "identitas" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}>
-                3
+                {countBy("identitas")}
               </span>
             </button>
             <button
@@ -354,7 +356,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
             >
               <span>Pencatatan Sipil</span>
               <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${activeCategory === "sipil" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}>
-                2
+                {countBy("sipil")}
               </span>
             </button>
             <button
@@ -368,7 +370,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
             >
               <span>Perpindahan & NIK</span>
               <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${activeCategory === "perpindahan" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}>
-                3
+                {countBy("perpindahan")}
               </span>
             </button>
           </div>
@@ -438,7 +440,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
               <span className="material-symbols-outlined text-2xl">search_off</span>
             </div>
             <div className="space-y-1">
-              <h4 className="text-sm font-bold text-slate-800">Layanan Tidak Ditemukan</h4>
+              <h4 className="text-sm font-bold text-[#0F172A]">Layanan Tidak Ditemukan</h4>
               <p className="text-xs text-slate-500 max-w-sm">
                 Tidak ada layanan yang cocok dengan kata kunci &quot;{searchQuery}&quot;. Silakan coba kata kunci lain seperti KTP, Akta, atau KIA.
               </p>
@@ -480,10 +482,10 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
             </div>
             <div className="text-xs text-slate-600 space-y-1">
               <p>
-                <strong className="text-slate-800">Senin - Kamis:</strong> 08.00 - 15.30 WIB
+                <strong className="text-[#0F172A]">Senin - Kamis:</strong> 08.00 - 15.30 WIB
               </p>
               <p>
-                <strong className="text-slate-800">Jumat:</strong> 08.00 - 14.30 WIB
+                <strong className="text-[#0F172A]">Jumat:</strong> 08.00 - 14.30 WIB
               </p>
               <p className="text-[10px] text-slate-400 pt-1">
                 *VeriBot AI Layanan Mandiri aktif 24 Jam Non-Stop

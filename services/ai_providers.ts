@@ -19,8 +19,6 @@
 
 export const NARA_ROUTE_BASE_URL = "https://router.bynara.id/v1";
 
-export type AIProviderName = "nara-route" | "gemini" | string;
-
 export interface AIProviderConfig {
   /** Nama unik provider, dipakai sebagai key global. */
   name: string;
@@ -57,15 +55,6 @@ export const AI_PROVIDERS: Record<string, AIProviderConfig> = {
   },
 };
 
-export function listProviders(): AIProviderConfig[] {
-  return Object.values(AI_PROVIDERS);
-}
-
-export function getProvider(name: AIProviderName): AIProviderConfig | null {
-  if (!name) return null;
-  return AI_PROVIDERS[name] || null;
-}
-
 /** Ambil baseURL nara-route (sudah dinormalisasi tanpa trailing slash). */
 export function getNaraRouteBaseURL(): string {
   const fromEnv = (process.env.NARA_ROUTE_BASE_URL || "").trim();
@@ -85,6 +74,93 @@ export function getNaraRouteApiKey(explicitKey?: unknown): string {
 
 export function isNaraRouteConfigured(explicitKey?: unknown): boolean {
   return getNaraRouteApiKey(explicitKey).length > 0;
+}
+
+/** Ambil API key Gemini (env: GEMINI_API_KEY). */
+export function getGeminiApiKey(): string {
+  return (process.env.GEMINI_API_KEY || "").trim();
+}
+
+export function isGeminiConfigured(): boolean {
+  return getGeminiApiKey().length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Validasi kunci AI saat startup + health-check (tanpa network call,
+// tanpa membakar kuota, tanpa membocorkan isi kunci ke log/respons).
+// ---------------------------------------------------------------------------
+
+/** Fragmen nilai dummy/placeholder yang pernah ter-commit — pasti ditolak provider. */
+const PLACEHOLDER_FRAGMENTS = ["xVCFY", "CONTOH", "EXAMPLE", "YOUR_KEY", "ISI_DISINI", "xxx", "***"];
+
+export interface AiKeyStatus {
+  provider: "nara-route" | "gemini";
+  envVar: string;
+  /** Ada nilai (apa pun isinya). */
+  present: boolean;
+  /** Format awalan sesuai ekspektasi provider. */
+  formatOk: boolean;
+  /** Cocok dengan nilai dummy yang diketahui mati. */
+  isPlaceholder: boolean;
+  /** Siap dipakai (ada + format ok + bukan placeholder). */
+  ready: boolean;
+  /** Sidik aman untuk log: 7 karakter pertama + panjang (BUKAN isi kunci). */
+  fingerprint: string;
+  /** Saran perbaikan (Indonesia). Kosong bila ready. */
+  hint: string;
+}
+
+function fingerprintOf(key: string): string {
+  if (!key) return "-";
+  return `${key.slice(0, 7)}…(len:${key.length})`;
+}
+
+function checkKey(provider: AiKeyStatus["provider"], envVar: string, key: string, expectedPrefix: string): AiKeyStatus {
+  const present = key.length > 0;
+  const upper = key.toUpperCase();
+  const isPlaceholder = present && PLACEHOLDER_FRAGMENTS.some((f) => upper.includes(f));
+  const formatOk = present && key.startsWith(expectedPrefix);
+  const ready = present && formatOk && !isPlaceholder;
+  let hint = "";
+  if (!present) {
+    hint =
+      provider === "nara-route"
+        ? `${envVar} kosong. Isi dengan API key valid dari dashboard router Nara, atau isi GEMINI_API_KEY sebagai cadangan.`
+        : `${envVar} kosong. Buat gratis di Google AI Studio (awalan AIza...).`;
+  } else if (isPlaceholder) {
+    hint = `${envVar} masih berisi nilai dummy/placeholder yang pasti ditolak provider (401). Ganti dengan key asli lalu restart/redeploy.`;
+  } else if (!formatOk) {
+    hint =
+      provider === "nara-route"
+        ? `${envVar} tidak berawalan "${expectedPrefix}". Periksa salah salin (spasi/kutip berlebih) atau key dari akun yang salah.`
+        : `${envVar} tidak berawalan "${expectedPrefix}". Key Gemini resmi selalu diawali AIza — periksa salah salin.`;
+  }
+  return { provider, envVar, present, formatOk, isPlaceholder, ready, fingerprint: fingerprintOf(key), hint };
+}
+
+/** Status kedua kunci AI (Nara + Gemini). Aman untuk log & health-check. */
+export function validateAiKeys(): AiKeyStatus[] {
+  return [
+    checkKey("nara-route", "NARA_ROUTE_API_KEY", getNaraRouteApiKey(), "sk-nry-"),
+    checkKey("gemini", "GEMINI_API_KEY", getGeminiApiKey(), "AIza"),
+  ];
+}
+
+/** Cetak laporan status kunci ke log server (peringatan dini sebelum ada yang scan). */
+export function logAiKeyStatus(): void {
+  try {
+    const statuses = validateAiKeys();
+    for (const s of statuses) {
+      if (s.ready) {
+        console.log(`[AI Keys] ${s.provider}: OK (${s.envVar} ${s.fingerprint})`);
+      } else {
+        console.warn(`[AI Keys] ${s.provider}: BELUM SIAP — ${s.hint} (${s.envVar} ${s.fingerprint})`);
+      }
+    }
+    if (!statuses.some((s) => s.ready)) {
+      console.warn("[AI Keys] Tidak ada provider AI yang siap — semua pindaian OCR akan gagal (502). Segera isi minimal satu kunci valid.");
+    }
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------
