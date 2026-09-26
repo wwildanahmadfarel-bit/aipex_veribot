@@ -8,7 +8,7 @@
 //      TICKET_FOTO_RETENTION_DAYS (default 7, untuk tiket non-final).
 
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
-import { getSupabase } from "./store";
+import { getSupabase } from "./store.js";
 
 export const FOTO_BUCKET = "tiket-fotos";
 

@@ -1,7 +1,7 @@
-import { setCors } from "./_lib/http";
-import { isWaEnabled } from "./_lib/wa";
-import { isOfficerJwtConfigured } from "./_lib/officer-auth";
-import { validateAiKeys } from "../services/ai_providers";
+import { setCors } from "./_lib/http.js";
+import { isWaEnabled } from "./_lib/wa.js";
+import { isOfficerJwtConfigured } from "./_lib/officer-auth.js";
+import { validateAiKeys } from "../services/ai_providers.js";
 
 export default async function handler(req: any, res: any) {
   if (setCors(req, res)) return;

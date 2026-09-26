@@ -1,5 +1,5 @@
-import { setCors } from "./_lib/http";
-import { handleOcr } from "./_lib/ocr-handler";
+import { setCors } from "./_lib/http.js";
+import { handleOcr } from "./_lib/ocr-handler.js";
 
 export const config = { api: { bodyParser: false } };
 

@@ -6,7 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import {
   getNaraRouteApiKey,
   isNaraRouteConfigured,
-} from "../../services/ai_providers";
+} from "../../services/ai_providers.js";
 
 export const BUKAN_KTP_MESSAGE =
   "File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang jelas dan tidak terpotong.";

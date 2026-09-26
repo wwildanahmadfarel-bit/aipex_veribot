@@ -1,7 +1,7 @@
-import { readJsonBody, setCors } from "../_lib/http";
-import { findFallbackOfficer, getSupabase, normalizeAccessCode } from "../_lib/store";
-import { checkSimpleRateLimit } from "../_lib/rate-limit";
-import { isOfficerJwtConfigured, signOfficerToken } from "../_lib/officer-auth";
+import { readJsonBody, setCors } from "../_lib/http.js";
+import { findFallbackOfficer, getSupabase, normalizeAccessCode } from "../_lib/store.js";
+import { checkSimpleRateLimit } from "../_lib/rate-limit.js";
+import { isOfficerJwtConfigured, signOfficerToken } from "../_lib/officer-auth.js";
 
 // Rate-limit login: maks 10x/10 mnt/IP (anti brute-force kode pendek).
 const LOGIN_10MIN = { windowMs: 10 * 60 * 1000, max: 10, prefix: "login10" };

@@ -1,7 +1,7 @@
 // Logging abuse best-effort ke Supabase — AIPEX VeriBot.
 // Tidak pernah melempar error; tabel boleh belum ada (diabaikan).
 
-import { getSupabase } from "./store";
+import { getSupabase } from "./store.js";
 
 export interface OcrLogEntry {
   ipHash: string;

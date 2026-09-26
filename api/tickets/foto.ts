@@ -1,6 +1,6 @@
-import { setCors } from "../_lib/http";
-import { checkSimpleRateLimit } from "../_lib/rate-limit";
-import { lihatFotoTiket } from "../_lib/tiket-foto";
+import { setCors } from "../_lib/http.js";
+import { checkSimpleRateLimit } from "../_lib/rate-limit.js";
+import { lihatFotoTiket } from "../_lib/tiket-foto.js";
 
 // GET /api/tickets/foto?kode=TKT-... — proksi byte foto terdekripsi (no-store).
 // Akses: petugas Bearer (kode apapun) ATAU warga pemilik (tahu kode tiketnya

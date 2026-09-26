@@ -2,7 +2,7 @@
 // Logic dipindah 1:1 dari server.ts agar perilaku identik.
 
 import { GoogleGenAI } from "@google/genai";
-import { visionViaNaraRoute } from "../../services/ai_providers";
+import { visionViaNaraRoute } from "../../services/ai_providers.js";
 import {
   BUKAN_KTP_MESSAGE,
   extractNaraApiKey,
@@ -15,9 +15,9 @@ import {
   normalizeStatusVerifikasi,
   parseAiJsonResponse,
   type TicketRow,
-} from "./store";
-import { parseMultipartBuffer, readJsonBody, readRawBody } from "./http";
-import { classifyAiFailure } from "./ai-errors";
+} from "./store.js";
+import { parseMultipartBuffer, readJsonBody, readRawBody } from "./http.js";
+import { classifyAiFailure } from "./ai-errors.js";
 import {
   checkOcrRateLimit,
   getClientIp,
@@ -27,11 +27,11 @@ import {
   ocrLimits,
   peekOcrWindowCount,
   rateLimitHeaders,
-} from "./rate-limit";
-import { isTurnstileConfigured, verifyTurnstile } from "./turnstile";
-import { sha256Hex, validateUploadBuffer } from "./file-guard";
-import { getCachedOcr, setCachedOcr } from "./ocr-cache";
-import { logOcrAttempt } from "./abuse-log";
+} from "./rate-limit.js";
+import { isTurnstileConfigured, verifyTurnstile } from "./turnstile.js";
+import { sha256Hex, validateUploadBuffer } from "./file-guard.js";
+import { getCachedOcr, setCachedOcr } from "./ocr-cache.js";
+import { logOcrAttempt } from "./abuse-log.js";
 
 const OCR_SYSTEM = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga / KK, dan Akta Kelahiran).
 
@@ -546,7 +546,7 @@ export async function handleOcr(req: any, res: any) {
     // bisa lihat sampai tiket diputus; tiket tetap valid bila arsip gagal.
     if (fotoCopy && supabase) {
       try {
-        const { simpanFotoTiket } = await import("./tiket-foto");
+        const { simpanFotoTiket } = await import("./tiket-foto.js");
         const saved = await simpanFotoTiket(kodeTiket, fotoCopy, mimeType);
         if (saved.ok && saved.path) {
           inMemTicket.foto_path = saved.path;

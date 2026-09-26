@@ -1,7 +1,7 @@
-import { readJsonBody, setCors } from "./_lib/http";
-import { checkSimpleRateLimit, CHAT_10MIN } from "./_lib/rate-limit";
-import { extractNaraApiKey, getGeminiClient, isNaraConfigured } from "./_lib/store";
-import { chatCompletionViaNaraRoute } from "../services/ai_providers";
+import { readJsonBody, setCors } from "./_lib/http.js";
+import { checkSimpleRateLimit, CHAT_10MIN } from "./_lib/rate-limit.js";
+import { extractNaraApiKey, getGeminiClient, isNaraConfigured } from "./_lib/store.js";
+import { chatCompletionViaNaraRoute } from "../services/ai_providers.js";
 
 function getOfflineFaqAnswer(text: string): string {
   const lower = text.toLowerCase();

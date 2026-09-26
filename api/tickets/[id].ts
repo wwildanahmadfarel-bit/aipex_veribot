@@ -1,5 +1,5 @@
-import { readJsonBody, setCors } from "../_lib/http";
-import { getSupabase, memTickets, toPublicTicket } from "../_lib/store";
+import { readJsonBody, setCors } from "../_lib/http.js";
+import { getSupabase, memTickets, toPublicTicket } from "../_lib/store.js";
 
 // GET /api/tickets/:kode → lacak tiket per kode
 // PATCH /api/tickets/:id → update status (fallback OfficerDashboard lama)

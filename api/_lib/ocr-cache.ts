@@ -3,7 +3,7 @@
 // Yang di-cache: parsed AI (jenis/status/skor/nik/nama/catatan), BUKAN tiket
 // (tiket tetap diterbitkan unik per request agar QR tidak dobel).
 
-import { redisGet, redisSet } from "./rate-limit";
+import { redisGet, redisSet } from "./rate-limit.js";
 
 const MEM = new Map<string, { exp: number; value: any }>();
 const MEM_CAP = 300;

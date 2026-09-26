@@ -1,6 +1,6 @@
-import { setCors } from "../_lib/http";
-import { fotoRetentionDays } from "../_lib/tiket-foto";
-import { getSupabase } from "../_lib/store";
+import { setCors } from "../_lib/http.js";
+import { fotoRetentionDays } from "../_lib/tiket-foto.js";
+import { getSupabase } from "../_lib/store.js";
 
 // GET /api/cron/purge-tiket-foto — sweeper foto tiket terbengkalai.
 // Guard: header x-cron-secret == CRON_SECRET (401 bila cocok tidak).

@@ -1,5 +1,5 @@
-import { readJsonBody, setCors } from "./_lib/http";
-import { checkSimpleRateLimit, TICKET_HOUR } from "./_lib/rate-limit";
+import { readJsonBody, setCors } from "./_lib/http.js";
+import { checkSimpleRateLimit, TICKET_HOUR } from "./_lib/rate-limit.js";
 import {
   BUKAN_KTP_MESSAGE,
   getSupabase,
@@ -8,7 +8,7 @@ import {
   normalizeStatusVerifikasi,
   toPublicTicket,
   type TicketRow,
-} from "./_lib/store";
+} from "./_lib/store.js";
 
 // GET /api/tickets — daftar semua tiket (Supabase utama, memori fallback)
 // POST /api/tickets — buat tiket (dengan validasi bukti scan)

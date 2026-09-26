@@ -1,9 +1,9 @@
-import { readJsonBody, setCors } from "../_lib/http";
-import { getSupabase, memTickets } from "../_lib/store";
-import { WaError, isWaEnabled, normalizeWa, sendFonnteWa, ticketStatusMessage } from "../_lib/wa";
-import { officerUnauthorized, requireOfficer } from "../_lib/officer-auth";
-import { PHOTO_PURGE_AUDIT_NOTE } from "../_lib/file-guard";
-import { hapusFotoTiket } from "../_lib/tiket-foto";
+import { readJsonBody, setCors } from "../_lib/http.js";
+import { getSupabase, memTickets } from "../_lib/store.js";
+import { WaError, isWaEnabled, normalizeWa, sendFonnteWa, ticketStatusMessage } from "../_lib/wa.js";
+import { officerUnauthorized, requireOfficer } from "../_lib/officer-auth.js";
+import { PHOTO_PURGE_AUDIT_NOTE } from "../_lib/file-guard.js";
+import { hapusFotoTiket } from "../_lib/tiket-foto.js";
 
 // GET /api/admin/tickets — daftar pengajuan untuk petugas (WAJIB Bearer)
 // PATCH /api/admin/tickets — ubah status + catat verification_logs (WAJIB Bearer)

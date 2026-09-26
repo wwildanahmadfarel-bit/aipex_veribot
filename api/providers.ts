@@ -1,5 +1,5 @@
-import { setCors } from "./_lib/http";
-import { AI_PROVIDERS, getNaraRouteBaseURL, validateAiKeys } from "../services/ai_providers";
+import { setCors } from "./_lib/http.js";
+import { AI_PROVIDERS, getNaraRouteBaseURL, validateAiKeys } from "../services/ai_providers.js";
 
 export default async function handler(req: any, res: any) {
   if (setCors(req, res)) return;
