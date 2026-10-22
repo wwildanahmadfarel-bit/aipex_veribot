@@ -52,7 +52,7 @@ export default async function handler(req: any, res: any) {
     ...(!ocrReady
       ? {
           warning:
-            "Tidak ada provider AI yang siap — pindaian OCR akan gagal (502). Isi NARA_ROUTE_API_KEY dan/atau GEMINI_API_KEY yang valid lalu restart/redeploy.",
+            "Tidak ada provider AI yang siap — pindaian OCR akan gagal (502). Isi NARA_ROUTE_API_KEY / BYNARA_API_KEY dan/atau GEMINI_API_KEY yang valid lalu restart/redeploy.",
         }
       : {}),
   });

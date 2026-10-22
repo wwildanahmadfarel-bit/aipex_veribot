@@ -24,11 +24,11 @@ export interface AiFailure {
   retryAfterSec: number;
 }
 
-export type AiProviderTag = "nara-route" | "gemini" | "unknown";
+export type AiProviderTag = "nara-route" | "bynara" | "gemini" | "unknown";
 
 /**
  * Tebak provider sumber error dari prefiks pesan yang dipakai caller:
- * - "nara-route: ..." (visionViaNaraRoute di ocr-handler/server)
+ * - "nara-route: ..." / "bynara: ..." (visionViaNaraRoute/visionViaBynara di ocr-handler/server)
  * - "Gemini <model>: ..." (SDK Google GenAI di ocr-handler/server)
  * Dipakai agar log langsung menunjuk provider bermasalah (401 Nara vs Gemini gagal).
  */
@@ -36,6 +36,9 @@ export function detectAiProvider(lastAiError: unknown): AiProviderTag {
   const t = String(lastAiError || "").toLowerCase();
   if (t.startsWith("nara-route:") || t.includes("nara-route vision") || t.includes("router.bynara.id")) {
     return "nara-route";
+  }
+  if (t.startsWith("bynara:") || t.includes("bynara vision") || t.includes("bynara_api_key")) {
+    return "bynara";
   }
   if (t.startsWith("gemini ") || t.includes("gemini")) {
     return "gemini";
@@ -136,6 +139,7 @@ function retryAfterFor(subcode: AiTransientSubcode): number {
 function providerLabel(provider: AiProviderTag): string {
   if (provider === "gemini") return "via Gemini";
   if (provider === "nara-route") return "via Nara";
+  if (provider === "bynara") return "via Bynara";
   return "";
 }
 

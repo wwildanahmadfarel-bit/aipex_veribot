@@ -93,7 +93,11 @@ export default async function handler(req: any, res: any) {
       try {
         const reply = await chatCompletionViaNaraRoute({
           apiKey: naraApiKey,
-          model: (body?.naraModel as string) || process.env.NARA_ROUTE_MODEL || undefined,
+          model:
+            ((body?.naraModel || body?.bynaraModel) as string) ||
+            process.env.NARA_ROUTE_MODEL ||
+            process.env.BYNARA_MODEL ||
+            undefined,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: message },
@@ -107,7 +111,7 @@ export default async function handler(req: any, res: any) {
     }
 
     if (client) {
-      const candidateModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
+      const candidateModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
       for (const modelName of candidateModels) {
         try {
           const response = await client.models.generateContent({

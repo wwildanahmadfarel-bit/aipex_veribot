@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { OcrPreScreenResult, PreScreenInitialData } from "../types";
+import { BLUR_SEVERITY_STYLE, blurAreaLabel, normalizeBlurAreas } from "../lib/blurAreas";
 import {
   PAGE_STARTED_AT,
   QUOTA_MAX,
@@ -471,6 +472,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
           jenis_dokumen: jenis,
           status_verifikasi: status,
           isSystemError: false,
+          blur_areas: tidakValid ? [] : normalizeBlurAreas(parsedRes.blur_areas),
         });
         if (myScanId !== scanIdRef.current) return;
         setIsScanning(false);
@@ -906,6 +908,26 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                   >
                     {previewResult.catatan}
                   </p>
+                  {!isSystemError && (previewResult.blur_areas?.length || 0) > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {(previewResult.blur_areas || []).map((a, i) => {
+                        const style = BLUR_SEVERITY_STYLE[a.severity] || BLUR_SEVERITY_STYLE.medium;
+                        return (
+                          <li key={`blur-legend-${i}`} className="flex items-start gap-1.5 text-[11px] leading-snug">
+                            <span
+                              className={`mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-[9px] font-bold ${style.chip}`}
+                            >
+                              {i + 1}
+                            </span>
+                            <span className="opacity-90">
+                              <b>{blurAreaLabel(a.area)}</b> — {style.label}
+                              {a.description ? ` (${a.description})` : ""}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </div>
               </div>
 
@@ -969,11 +991,34 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                   {previewResult.imageBase64 &&
                   !/\.pdf$/i.test(previewResult.imageName || "") &&
                   !previewResult.imageBase64.startsWith("data:application/pdf") ? (
-                    <img
-                      src={previewResult.imageBase64}
-                      alt="Pratinjau Dokumen"
-                      className="max-h-[160px] w-auto max-w-full object-contain rounded-lg shadow-md border border-slate-800"
-                    />
+                    <div className="relative inline-block max-w-full">
+                      <img
+                        src={previewResult.imageBase64}
+                        alt="Pratinjau Dokumen"
+                        className="block max-h-[160px] w-auto max-w-full object-contain rounded-lg shadow-md border border-slate-800"
+                      />
+                      {(previewResult.blur_areas || []).map((a, i) => {
+                        const style = BLUR_SEVERITY_STYLE[a.severity] || BLUR_SEVERITY_STYLE.medium;
+                        return (
+                          <div
+                            key={`blur-box-${i}`}
+                            className={`absolute rounded-sm border ${style.box}`}
+                            style={{
+                              left: `${a.bbox[0]}%`,
+                              top: `${a.bbox[1]}%`,
+                              width: `${a.bbox[2]}%`,
+                              height: `${a.bbox[3]}%`,
+                            }}
+                          >
+                            <span
+                              className={`absolute -left-px -top-px flex h-4 w-4 items-center justify-center rounded-br-sm text-[9px] font-bold leading-none ${style.chip}`}
+                            >
+                              {i + 1}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : previewResult.imageBase64 ? (
                     <div className="py-6 text-center text-slate-300">
                       <FileText className="w-10 h-10 mx-auto text-red-400 mb-1" />

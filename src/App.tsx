@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Header } from "./components/Header";
 import { Footer } from "./components/Footer";
 import { PortalHome } from "./components/PortalHome";
@@ -11,17 +11,23 @@ import { InteractiveWizard } from "./components/InteractiveWizard";
 import AdminDashboard from "./components/AdminDashboard";
 import { RequirementModal } from "./components/RequirementModal";
 import { TicketStatusModal } from "./components/TicketStatusModal";
+import { TransparencyPage } from "./components/TransparencyPage";
 import OfficerLoginModal from "./components/OfficerLoginModal";
 import FloatingVeriBot from "./components/FloatingVeriBot";
 import { ExitDashboardConfirmModal } from "./components/ExitDashboardConfirmModal";
 import { Ticket, ServiceCatalogItem, PreScreenInitialData } from "./types";
 
-type AppView = "portal" | "wizard" | "login" | "officer";
+type AppView = "portal" | "wizard" | "login" | "officer" | "transparansi";
 
 interface PendingNav {
   view: AppView;
   targetId?: string;
   destLabel?: string;
+}
+
+interface HistoryState {
+  aipexView: AppView;
+  targetId?: string;
 }
 
 function getOfficerName(): string {
@@ -46,8 +52,12 @@ function scrollToTarget(targetId?: string) {
   }, 150);
 }
 
+function buildState(view: AppView, targetId?: string): HistoryState {
+  return { aipexView: view, targetId };
+}
+
 export default function App() {
-  const [currentView, setCurrentView] = useState<"portal" | "wizard" | "login" | "officer">("portal");
+  const [currentView, setCurrentView] = useState<"portal" | "wizard" | "login" | "officer" | "transparansi">("portal");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedService, setSelectedService] = useState<string>("Penerbitan KTP-EL Baru / Penggantian");
   const [selectedRequirementService, setSelectedRequirementService] = useState<ServiceCatalogItem | null>(null);
@@ -56,11 +66,18 @@ export default function App() {
   // Guard keluar dashboard: semua navigasi portal/wizard saat mode officer
   // wajib lewat requestNavigate agar muncul popup konfirmasi (sesi tetap disimpan).
   const [exitConfirm, setExitConfirm] = useState<PendingNav | null>(null);
+  // Ref untuk menghindari loop popstate <-> setCurrentView
+  const isPopstateRef = useRef(false);
 
-  const doNavigate = (view: AppView, targetId?: string) => {
+  const doNavigate = (view: AppView, targetId?: string, pushHistory = true) => {
     setCurrentView(view);
-    if (view === "portal" || view === "wizard") scrollToTarget(targetId);
+    if (view === "portal" || view === "wizard" || view === "transparansi") scrollToTarget(targetId);
     else window.scrollTo({ top: 0, behavior: "smooth" });
+    if (pushHistory && !isPopstateRef.current) {
+      try {
+        history.pushState(buildState(view, targetId), "", "");
+      } catch {}
+    }
   };
 
   const requestNavigate = (view: AppView, targetId?: string, destLabel?: string) => {
@@ -70,6 +87,42 @@ export default function App() {
     }
     doNavigate(view, targetId);
   };
+
+  // Browser Back/Forward → sinkronkan view dari history.state
+  useEffect(() => {
+    const onPopState = (e: PopStateEvent) => {
+      const state = e.state as HistoryState | null;
+      if (!state?.aipexView) return;
+      isPopstateRef.current = true;
+      // Guard wizard: Back jangan langsung membuang data. App menahan view,
+      // lalu wizard membuka modal "Lanjutkan mengisi / Keluar (draft tersimpan)".
+      if (currentView === "wizard" && state.aipexView !== "wizard") {
+        isPopstateRef.current = false;
+        window.dispatchEvent(new Event("aipex:wizard-back"));
+        return;
+      }
+      // Guard officer: Back dari dashboard tetap minta konfirmasi
+      if (currentView === "officer" && state.aipexView !== "officer") {
+        setExitConfirm({ view: state.aipexView, targetId: state.targetId, destLabel: "Portal Warga" });
+        // Kembalikan history agar tidak keluar dari dashboard
+        history.pushState(buildState("officer"), "");
+        isPopstateRef.current = false;
+        return;
+      }
+      doNavigate(state.aipexView, state.targetId, false);
+      isPopstateRef.current = false;
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [currentView]);
+
+  // Inisialisasi history entry awal — hanya sekali. Jangan dijalankan setiap
+  // currentView berubah, karena akan menimpa state entri wizard yang baru di-push.
+  useEffect(() => {
+    try {
+      history.replaceState(buildState("portal"), "");
+    } catch {}
+  }, []);
 
   // Load initial tickets from backend (jalur publik; /api/admin/* kini wajib Bearer).
   const fetchTickets = async () => {
@@ -126,8 +179,7 @@ export default function App() {
     if (serviceName) {
       setSelectedService(serviceName);
     }
-    setCurrentView("wizard");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    doNavigate("wizard");
   };
 
   // Proceed to Wizard from OCR Pre-screening Preview Card
@@ -136,8 +188,7 @@ export default function App() {
     if (data.service) {
       setSelectedService(data.service);
     }
-    setCurrentView("wizard");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    doNavigate("wizard");
   };
 
   // Open Requirement modal
@@ -220,11 +271,14 @@ export default function App() {
             initialPreScreenData={preScreenData}
             onBackToPortal={() => {
               setPreScreenData(null);
-              setCurrentView("portal");
-              window.scrollTo({ top: 0, behavior: "smooth" });
+              doNavigate("portal");
             }}
             onTicketCreated={handleTicketCreated}
           />
+        )}
+
+        {currentView === "transparansi" && (
+          <TransparencyPage onLogin={() => doNavigate("login")} />
         )}
 
         {currentView === "officer" && (
@@ -248,6 +302,7 @@ export default function App() {
         onRequestNav={(targetId, destLabel) => {
           requestNavigate("portal", targetId, destLabel);
         }}
+        onOpenTransparansi={() => requestNavigate("transparansi")}
       />
 
       {/* Modals & Floating Components */}

@@ -46,6 +46,16 @@ export interface VerificationResult {
   skor: number;
   catatan: string;
   source?: string;
+  /** Area dokumen yang terdeteksi kurang jelas (hasil Gemini Vision). */
+  blur_areas?: BlurArea[];
+}
+
+/** Kotak area kurang jelas pada foto dokumen. bbox dalam persen 0-100. */
+export interface BlurArea {
+  area: string;
+  severity: "high" | "medium" | "low";
+  bbox: [number, number, number, number];
+  description: string;
 }
 
 export interface PrescreeningResult {
@@ -71,6 +81,8 @@ export interface OcrPreScreenResult {
   jenis_dokumen?: "KTP" | "KK" | "AKTA" | "LAINNYA" | string;
   status_verifikasi?: "BERHASIL" | "BURAM" | "TIDAK_VALID" | string;
   isSystemError?: boolean;
+  /** Area dokumen yang terdeteksi kurang jelas (untuk overlay pada pratinjau). */
+  blur_areas?: BlurArea[];
   /** True bila hasil berasal dari penilaian offline lokal (AI gangguan) — bukan vonis AI. */
   isOfflineDemo?: boolean;
 }

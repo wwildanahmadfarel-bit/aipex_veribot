@@ -3,10 +3,10 @@ import { motion } from "framer-motion";
 import { AipexLogo } from "./AipexLogo";
 
 interface HeaderProps {
-  currentView: "portal" | "wizard" | "login" | "officer";
-  onNavigate: (view: "portal" | "wizard" | "login" | "officer") => void;
+  currentView: "portal" | "wizard" | "login" | "officer" | "transparansi";
+  onNavigate: (view: "portal" | "wizard" | "login" | "officer" | "transparansi") => void;
   /** Navigasi terjaga: App menampilkan popup konfirmasi bila sedang mode officer. */
-  onRequestNav?: (view: "portal" | "wizard" | "login" | "officer", targetId?: string, destLabel?: string) => void;
+  onRequestNav?: (view: "portal" | "wizard" | "login" | "officer" | "transparansi", targetId?: string, destLabel?: string) => void;
   pendingCount?: number;
 }
 
@@ -27,6 +27,10 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("beranda");
   const menuRef = useRef<HTMLDivElement>(null);
+  // Flag: user sedang klik nav manual → hentikan scroll listener temporarily
+  const isUserNavigating = useRef(false);
+  // Timeout ref untuk delay reset beranda
+  const resetBerandaTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Tanggal real-time (format Indonesia: "Rabu, 16 September 2026";
   // versi pendek "16 Sep 2026" untuk layar HP agar banner tidak terpotong)
@@ -57,11 +61,13 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
   // Sync activeTab when user scrolls on the portal page
   useEffect(() => {
     if (currentView !== "portal") {
-      // If we are on wizard or officer or login, we can keep or adjust
       return;
     }
 
     const handleScroll = () => {
+      // Jangan update activeTab saat user sedang klik nav manual
+      if (isUserNavigating.current) return;
+
       const scrollPos = window.scrollY + 220;
       const faqEl = document.getElementById("faqSection");
       const alurEl = document.getElementById("alurLayanan");
@@ -82,15 +88,26 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
     return () => window.removeEventListener("scroll", handleScroll);
   }, [currentView]);
 
-  // When currentView changes back to portal, reset to beranda if at top
+  // When currentView changes back to portal, reset to beranda if at top (with delay)
   useEffect(() => {
     if (currentView === "portal" && window.scrollY < 100) {
-      setActiveTab("beranda");
+      // Clear previous timeout
+      if (resetBerandaTimeout.current) clearTimeout(resetBerandaTimeout.current);
+      // Delay reset beranda agar scroll listener sempat update dulu
+      resetBerandaTimeout.current = setTimeout(() => {
+        // Double-check: jangan reset jika user sedang navigasi manual
+        if (!isUserNavigating.current) {
+          setActiveTab("beranda");
+        }
+      }, 300);
     }
+    return () => {
+      if (resetBerandaTimeout.current) clearTimeout(resetBerandaTimeout.current);
+    };
   }, [currentView]);
 
   const requestNav = (
-    view: "portal" | "wizard" | "login" | "officer",
+    view: "portal" | "wizard" | "login" | "officer" | "transparansi",
     targetId?: string,
     destLabel?: string
   ) => {
@@ -102,6 +119,8 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
   };
 
   const handleNavClick = (item: NavItem) => {
+    // Set flag: user klik nav manual → hentikan scroll listener sementara
+    isUserNavigating.current = true;
     setActiveTab(item.id);
     // Scroll ditangani App setelah konfirmasi (agar tidak jalan sebelum user tekan Ya).
     requestNav("portal", item.targetId, item.label);
@@ -122,6 +141,10 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
         }
       }
     }
+    // Reset flag setelah scroll selesai (estimasi 800ms smooth scroll + buffer)
+    setTimeout(() => {
+      isUserNavigating.current = false;
+    }, 1000);
   };
 
   useEffect(() => {
@@ -211,8 +234,9 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
                       className="absolute inset-0 bg-[#2563eb] rounded-lg shadow-sm"
                       transition={{
                         type: "spring",
-                        stiffness: 380,
-                        damping: 30,
+                        stiffness: 420,
+                        damping: 35,
+                        mass: 0.9,
                       }}
                     />
                   )}
@@ -317,6 +341,18 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
                 >
                   <span className="material-symbols-outlined text-[18px] text-slate-400">help</span>
                   <span>Bantuan & Panduan</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    requestNav("transparansi", undefined, "Transparansi AI");
+                  }}
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-medium text-slate-300 hover:bg-[#1E293B]/40 hover:text-white rounded-lg transition-colors cursor-pointer text-left"
+                >
+                  <span className="material-symbols-outlined text-[18px] text-slate-400">analytics</span>
+                  <span>Transparansi AI (Tier-1 Publik)</span>
                 </button>
               </div>
             )}

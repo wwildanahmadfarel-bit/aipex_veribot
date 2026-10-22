@@ -8,7 +8,7 @@ export type DetectedFileType = "jpg" | "png" | "webp" | "pdf" | "unknown";
 export const MAX_UPLOAD_BYTES = 4_200_000; // batas payload Vercel
 export const MIN_IMAGE_BYTES = 20 * 1024;
 export const MIN_PDF_BYTES = 4 * 1024;
-export const MIN_DIMENSION = 400;
+export const MIN_DIMENSION = 200;
 
 export function sha256Hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");

@@ -6,6 +6,15 @@ import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
 import { AipexLogo } from "./AipexLogo";
 import { jenisLabel } from "./OcrPreScreenCard";
 import { catalogServices } from "../data/servicesData";
+import { BLUR_SEVERITY_STYLE, blurAreaLabel, normalizeBlurAreas } from "../lib/blurAreas";
+import {
+  clearDraft,
+  loadDraft,
+  saveDraft,
+  type CombinedPdfPage,
+  type WizardDraft,
+} from "../lib/draftStore";
+import { PdfCombinedUpload, type CombinedPdfReadyPage } from "./PdfCombinedUpload";
 import {
   PAGE_STARTED_AT,
   formatCountdown,
@@ -24,6 +33,29 @@ interface InteractiveWizardProps {
   onBackToPortal: () => void;
   onTicketCreated: (ticket: Ticket) => void;
 }
+
+const isPdfDataUrl = (value?: string | null): boolean =>
+  !!value && /^data:application\/pdf[;,]/.test(value);
+
+const toDataUrl = (base64: string, mimeType: string): string =>
+  /^data:/.test(base64) ? base64 : `data:${mimeType || "application/pdf"};base64,${base64}`;
+
+const formatDraftTime = (ts?: number): string => {
+  if (!ts) return "-";
+  try {
+    return new Date(ts).toLocaleString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "-";
+  }
+};
+
+const MAX_FILE_MB = 4;
+
 
 export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   initialService = "Penerbitan KTP-EL Baru / Penggantian",
@@ -47,6 +79,20 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const [docImageName, setDocImageName] = useState<string>("");
   const [supportFiles, setSupportFiles] = useState<{ base64: string; name: string }[]>([]);
 
+  // Mode unggah: foto/PDF terpisah per slot, atau SATU PDF gabungan (dipecah di browser).
+  const [uploadMode, setUploadMode] = useState<"individual" | "combined">("individual");
+  const [combinedPages, setCombinedPages] = useState<CombinedPdfPage[]>([]);
+
+  // Draft IndexedDB (TTL 24 jam) + guard keluar.
+  const [draftBanner, setDraftBanner] = useState<WizardDraft | null>(null);
+  const [draftReady, setDraftReady] = useState<boolean>(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  const [exitConfirmOpen, setExitConfirmOpen] = useState<boolean>(false);
+  const applyingDraftRef = useRef<boolean>(false);
+  const draftSuppressedRef = useRef<boolean>(false);
+  const draftSnapshotRef = useRef<Omit<WizardDraft, "id" | "updatedAt" | "expiresAt"> | null>(null);
+  const saveNowRef = useRef<() => Promise<void>>(async () => {});
+
   // Daftar berkas WAJIB mengikuti syarat layanan (badge WAJIB di katalog).
   // Sumber kebenaran tunggal: servicesData.ts — ubah di sana bila ketentuan berubah.
   const requiredDocs = (() => {
@@ -62,12 +108,16 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setDocImageBase64(null);
     setDocImageName("");
     setSupportFiles([]);
+    setCombinedPages([]);
+    setUploadMode("individual");
   };
 
   // Step 3: AI Scanner & Verification
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanProgress, setScanProgress] = useState<number>(0);
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  // Overlay area buram pada pratinjau foto (default tampil, bisa disembunyikan warga).
+  const [showBlurAreas, setShowBlurAreas] = useState<boolean>(true);
 
   // Step 4: Generated Ticket
   const [generatedTicket, setGeneratedTicket] = useState<Ticket | null>(null);
@@ -103,6 +153,194 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     }
   }, [initialPreScreenData]);
 
+  // ---------------------------------------------------------------------
+  // Draft IndexedDB: pulihkan, autosave, dan bersihkan setelah tiket terbit.
+  // ---------------------------------------------------------------------
+  const hasDraftData = !!(
+    nik.trim() ||
+    nama.trim() ||
+    wa.trim() ||
+    alamat.trim() ||
+    docImageBase64 ||
+    supportFiles.some((f) => !!f?.base64) ||
+    combinedPages.length > 0
+  );
+
+  const applyDraft = (draft: WizardDraft) => {
+    applyingDraftRef.current = true;
+    draftSuppressedRef.current = false;
+    setSelectedService(draft.service || initialService);
+    setNik(draft.nik || "");
+    setNama(draft.nama || "");
+    setWa(draft.wa || "");
+    setAlamat(draft.alamat || "");
+    // Hasil scan tidak disimpan; kembalikan ke Langkah 2 agar warga memindai ulang.
+    setCurrentStep((draft.currentStep >= 3 ? 2 : draft.currentStep || 1) as 1 | 2 | 3 | 4);
+    setDocImageBase64(draft.docImageBase64 || null);
+    setDocImageName(draft.docImageName || "");
+    setSupportFiles(draft.supportFiles || []);
+    setUploadMode(draft.uploadMode || "individual");
+    setCombinedPages(draft.combinedPdfPages || []);
+    setVerificationResult(null);
+    setGeneratedTicket(null);
+    setDraftBanner(null);
+    setDraftSavedAt(draft.updatedAt || null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.setTimeout(() => {
+      applyingDraftRef.current = false;
+    }, 250);
+  };
+
+  const startFresh = () => {
+    draftSuppressedRef.current = false;
+    setSelectedService(initialService);
+    setNik("");
+    setNama("");
+    setWa("");
+    setAlamat("");
+    resetAllUploads();
+    setCurrentStep(1);
+    setVerificationResult(null);
+    setGeneratedTicket(null);
+    setDraftBanner(null);
+    setDraftSavedAt(null);
+    setExitConfirmOpen(false);
+    void clearDraft();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const discardDraft = () => {
+    setDraftBanner(null);
+    setDraftSavedAt(null);
+    void clearDraft();
+  };
+
+  // Muat draft sekali saat wizard dibuka (kecuali datang dari pre-screen OCR).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const draft = await loadDraft();
+      if (cancelled) return;
+      if (draft && !initialPreScreenData) setDraftBanner(draft);
+      setDraftReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Snapshot terbaru untuk autosave & flush saat tab disembunyikan.
+  draftSnapshotRef.current = {
+    service: selectedService,
+    nik,
+    nama,
+    wa,
+    alamat,
+    currentStep: (currentStep <= 2 ? currentStep : 2) as 1 | 2,
+    docImageBase64,
+    docImageName,
+    supportFiles,
+    uploadMode,
+    combinedPdfPages: combinedPages,
+  };
+
+  const saveNow = async () => {
+    if (draftSuppressedRef.current) return;
+    if (!hasDraftData || currentStep === 4) return;
+    const snapshot = draftSnapshotRef.current;
+    if (!snapshot) return;
+    try {
+      await saveDraft(snapshot);
+      setDraftSavedAt(Date.now());
+    } catch {
+      // Draft tidak boleh memblokir alur utama.
+    }
+  };
+  saveNowRef.current = saveNow;
+
+  // Autosave debounce 500 ms.
+  useEffect(() => {
+    if (!draftReady || applyingDraftRef.current || draftSuppressedRef.current) return;
+    if (currentStep === 4 || !hasDraftData) return;
+    const timer = window.setTimeout(() => {
+      void saveNowRef.current();
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    draftReady,
+    hasDraftData,
+    currentStep,
+    selectedService,
+    nik,
+    nama,
+    wa,
+    alamat,
+    docImageBase64,
+    docImageName,
+    supportFiles,
+    uploadMode,
+    combinedPages,
+  ]);
+
+  // Flush saat tab ditutup/disembunyikan (IndexedDB tetap bisa ditulis).
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") void saveNowRef.current();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onHide);
+    };
+  }, []);
+
+  // Peringatan native bila tab ditutup saat masih ada data.
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (hasDraftData && currentStep < 4) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasDraftData, currentStep]);
+
+  const exitOriginRef = useRef<"button" | "back">("button");
+  const handleRequestExit = (origin: "button" | "back" = "button") => {
+    exitOriginRef.current = origin;
+    if (hasDraftData && currentStep < 4) {
+      setExitConfirmOpen(true);
+      return;
+    }
+    onBackToPortal();
+  };
+  const handleContinueFilling = () => {
+    setExitConfirmOpen(false);
+    // Back browser sudah memindahkan history ke portal; pulihkan entri wizard.
+    if (exitOriginRef.current === "back") {
+      try {
+        history.pushState({ aipexView: "wizard" }, "");
+      } catch {}
+    }
+  };
+  const handleConfirmExit = async () => {
+    await saveNow();
+    setExitConfirmOpen(false);
+    onBackToPortal();
+  };
+
+  // Browser Back ditahan oleh App (popstate) lalu diteruskan ke wizard.
+  useEffect(() => {
+    const onWizardBack = () => handleRequestExit("back");
+    window.addEventListener("aipex:wizard-back", onWizardBack as EventListener);
+    return () =>
+      window.removeEventListener("aipex:wizard-back", onWizardBack as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasDraftData, currentStep, onBackToPortal]);
+
 
   // Service contextual note
   const serviceContextMap: Record<string, string> = {
@@ -127,6 +365,12 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      alert(`Ukuran file maksimal ${MAX_FILE_MB} MB. Kompres foto atau pilih file yang lebih kecil.`);
+      return;
+    }
+    setUploadMode("individual");
+    setCombinedPages([]);
     setDocImageName(file.name);
     const reader = new FileReader();
     reader.onload = () => {
@@ -138,6 +382,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   /** Unggah berkas pendukung wajib (slot mengikuti urutan syarat layanan). */
   const handleSupportUpload = (slot: number, file: File | undefined) => {
     if (!file) return;
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      alert(`Ukuran file maksimal ${MAX_FILE_MB} MB. Kompres file atau pilih file yang lebih kecil.`);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       setSupportFiles((prev) => {
@@ -156,6 +404,37 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       next[slot] = { base64: "", name: "" };
       return next;
     });
+  };
+
+  /** Hasil pecahan PDF gabungan → dokumen utama (slot 0) + lampiran slot 1..N. */
+  const handlePdfPagesReady = (pages: CombinedPdfReadyPage[]) => {
+    if (!pages.length) return;
+    const mainSlotTitle = requiredDocs[0]?.title;
+    const main = pages.find((p) => p.slotTitle === mainSlotTitle) || pages[0];
+    const rest = pages.filter((p) => p !== main);
+    setCombinedPages(
+      pages.map((p) => ({
+        base64: p.base64,
+        mimeType: p.mimeType,
+        docType: p.docType,
+        fileName: p.fileName,
+        slotTitle: p.slotTitle,
+      }))
+    );
+    setDocImageBase64(toDataUrl(main.base64, main.mimeType));
+    setDocImageName(main.fileName);
+    setSupportFiles(
+      rest.map((p) => ({ base64: toDataUrl(p.base64, p.mimeType), name: p.fileName }))
+    );
+    setUploadMode("combined");
+  };
+
+  const removeCombinedPdf = () => {
+    setCombinedPages([]);
+    setDocImageBase64(null);
+    setDocImageName("");
+    setSupportFiles([]);
+    setUploadMode("combined");
   };
 
   /** Judul syarat yang berkasnya BELUM diunggah (untuk pesan validasi). */
@@ -207,6 +486,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setCurrentStep(3);
     setIsScanning(true);
     setScanProgress(10);
+    setShowBlurAreas(true);
+    setVerificationResult(null);
     window.scrollTo({ top: 120, behavior: "smooth" });
 
     // Progress animation
@@ -304,6 +585,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       };
 
       const parsed = data?.data || data || {};
+      // Area buram (overlay bbox) — hanya dipakai bila bentuknya valid.
+      const blurAreas = normalizeBlurAreas(parsed.blur_areas);
       const jenisNorm = normalizeJenis(parsed.jenis_dokumen);
       let statusNorm = normalizeStatus(parsed.status_verifikasi);
       if (jenisNorm === "LAINNYA") statusNorm = "TIDAK_VALID";
@@ -330,6 +613,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             ? parsed.catatan
             : BUKAN_KTP_MESSAGE,
           source: data.source,
+          blur_areas: [],
         };
       } else if (backendGagal || statusNorm !== "BERHASIL") {
         result = {
@@ -344,6 +628,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             data?.message ||
             "Dokumen buram, silakan foto ulang e-KTP di tempat terang tanpa flash.",
           source: data.source,
+          blur_areas: blurAreas,
         };
       } else {
         result = {
@@ -355,6 +640,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           catatan:
             parsed.catatan || "Kualitas berkas tajam, NIK dan Nama sinkron dengan data Dukcapil Sukamaju.",
           source: data.source,
+          blur_areas: blurAreas,
         };
       }
 
@@ -455,6 +741,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
         // Bukti simpan nomor: false = kolom phone belum dimigrasi / DB mati.
         setPhoneSaved(resData.phoneSaved === true);
         onTicketCreated(resData.data);
+        // Tiket sudah terbit → draft tidak diperlukan lagi (hapus data sensitif).
+        draftSuppressedRef.current = true;
+        void clearDraft();
+        setDraftSavedAt(null);
+        setDraftBanner(null);
         setCurrentStep(4);
         window.scrollTo({ top: 100, behavior: "smooth" });
 
@@ -495,9 +786,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   return (
     <div className="flex flex-col w-full" id="wizardView">
       {/* Sub-bar Navigation */}
-      <div className="w-full max-w-5xl mx-auto flex items-center justify-between mb-4 px-1">
+      <div className="w-full max-w-5xl mx-auto flex items-center justify-between gap-2 mb-4 px-1">
         <button
-          onClick={onBackToPortal}
+          onClick={() => handleRequestExit("button")}
           type="button"
           className="inline-flex items-center gap-1.5 text-[#2563eb] hover:text-blue-800 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
         >
@@ -505,11 +796,64 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           <span>Kembali ke Beranda</span>
         </button>
 
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-300 bg-white/90 text-slate-700 text-xs font-medium backdrop-blur-xs shadow-2xs">
-          <span className="material-symbols-outlined text-[15px] text-[#2563eb]">verified_user</span>
-          <span>Mode Mandiri Warga • UU PDP Protected</span>
+        <div className="flex items-center gap-2">
+          {draftSavedAt && hasDraftData && currentStep < 4 && (
+            <span className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-800 text-[11px] font-semibold">
+              <span className="material-symbols-outlined text-[14px]">cloud_done</span>
+              Draft tersimpan {formatDraftTime(draftSavedAt)}
+            </span>
+          )}
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-300 bg-white/90 text-slate-700 text-xs font-medium backdrop-blur-xs shadow-2xs">
+            <span className="material-symbols-outlined text-[15px] text-[#2563eb]">verified_user</span>
+            <span>Mode Mandiri Warga • UU PDP Protected</span>
+          </div>
+          {hasDraftData && currentStep < 4 && (
+            <button
+              type="button"
+              onClick={discardDraft}
+              title="Hapus draft yang tersimpan"
+              aria-label="Hapus draft yang tersimpan"
+              className="w-7 h-7 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:text-red-600 hover:border-red-300 transition-colors cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[15px]">delete</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Banner resume draft */}
+      {draftBanner && (
+        <div className="w-full max-w-5xl mx-auto mb-4 rounded-2xl border border-amber-200 bg-amber-50/90 p-4 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-amber-600 text-[24px]">history</span>
+              <div>
+                <p className="text-sm font-bold text-amber-950">Draft pengisian ditemukan</p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Terakhir disimpan {formatDraftTime(draftBanner.updatedAt)}. Data dan berkas
+                  tersimpan di browser ini maksimal 24 jam.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => applyDraft(draftBanner)}
+                className="px-3 py-2 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-colors cursor-pointer"
+              >
+                Lanjutkan draft
+              </button>
+              <button
+                type="button"
+                onClick={startFresh}
+                className="px-3 py-2 rounded-lg border border-amber-300 bg-white text-amber-900 text-xs font-semibold hover:bg-amber-100 transition-colors cursor-pointer"
+              >
+                Mulai baru
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Card Container */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 md:p-8 max-w-5xl mx-auto w-full">
@@ -825,7 +1169,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             <div className="flex flex-col sm:flex-row items-center justify-between pt-6 border-t border-slate-100 mt-2 gap-3">
               <button
                 type="button"
-                onClick={onBackToPortal}
+                onClick={() => handleRequestExit("button")}
                 className="w-full sm:w-auto px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-xs sm:text-sm font-semibold hover:bg-slate-50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">close</span>
@@ -859,6 +1203,34 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <span className="px-3 py-1 rounded-full bg-blue-50 text-[#2563eb] border border-blue-200 text-xs font-semibold self-start sm:self-center">
                 UU PDP In-Memory Auto-Purge
               </span>
+            </div>
+
+            {/* Mode unggah: terpisah per slot atau satu PDF gabungan */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-1.5 rounded-xl bg-slate-100 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setUploadMode("individual")}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
+                  uploadMode === "individual"
+                    ? "bg-white text-[#2563eb] shadow-2xs border border-blue-200"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[16px] align-middle mr-1">photo_library</span>
+                Unggah Terpisah (Foto/PDF)
+              </button>
+              <button
+                type="button"
+                onClick={() => setUploadMode("combined")}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
+                  uploadMode === "combined"
+                    ? "bg-white text-[#2563eb] shadow-2xs border border-blue-200"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[16px] align-middle mr-1">picture_as_pdf</span>
+                Satu PDF Gabungan
+              </button>
             </div>
 
             {/* Daftar syarat wajib + progres kelengkapan */}
@@ -896,6 +1268,56 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               );
             })()}
 
+            {uploadMode === "combined" ? (
+              combinedPages.length > 0 ? (
+                <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50/60 p-4 sm:p-5 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                      <span className="material-symbols-outlined text-[26px]">picture_as_pdf</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold text-emerald-950">
+                        PDF gabungan berhasil dipecah di browser
+                      </p>
+                      <p className="text-xs text-emerald-800 mt-0.5">
+                        {combinedPages.length} halaman terpetakan ke syarat layanan. Halaman dokumen
+                        utama siap dipindai AI; halaman lain tercatat sebagai lampiran.
+                      </p>
+                      <p className="text-[11px] text-emerald-700 mt-1 truncate">
+                        Dokumen utama: {docImageName || "-"}
+                      </p>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-bold uppercase shrink-0">
+                      Siap
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={removeCombinedPdf}
+                      className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      Ganti / proses ulang PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUploadMode("individual")}
+                      className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      Beralih ke unggah terpisah
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <PdfCombinedUpload
+                  slots={requiredDocs}
+                  selectedService={selectedService}
+                  onPagesReady={handlePdfPagesReady}
+                  onCancel={() => setUploadMode("individual")}
+                />
+              )
+            ) : (
+              <>
             {/* Slot 1: Dokumen utama (dipindai AI) */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 flex-wrap">
@@ -909,11 +1331,21 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               {docImageBase64 ? (
                 <div className="flex flex-col items-center gap-3 w-full">
                   <div className="relative max-w-md w-full rounded-xl overflow-hidden shadow-sm border border-slate-200 bg-white">
-                    <img
-                      src={docImageBase64}
-                      alt="Preview Dokumen"
-                      className="w-full h-56 object-cover"
-                    />
+                    {isPdfDataUrl(docImageBase64) ? (
+                      <div className="w-full h-56 flex flex-col items-center justify-center bg-slate-100 text-slate-600 gap-1.5 px-4 text-center">
+                        <span className="material-symbols-outlined text-[48px] text-red-500">picture_as_pdf</span>
+                        <span className="text-xs font-bold truncate max-w-full">
+                          {docImageName || "Dokumen PDF"}
+                        </span>
+                        <span className="text-[11px] text-slate-500">PDF halaman dokumen utama</span>
+                      </div>
+                    ) : (
+                      <img
+                        src={docImageBase64}
+                        alt="Preview Dokumen"
+                        className="w-full h-56 object-cover"
+                      />
+                    )}
                     <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-xs p-2 text-white flex items-center justify-between text-xs">
                       <span className="truncate max-w-[220px]">{docImageName || "Dokumen Berkas Terpilih"}</span>
                       <button
@@ -931,7 +1363,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   </div>
                   <p className="text-xs text-emerald-700 font-semibold flex items-center gap-1">
                     <span className="material-symbols-outlined text-[16px]">check_circle</span>
-                    <span>Foto siap dianalisis oleh Cognitive AI</span>
+                    <span>Berkas siap dianalisis oleh Cognitive AI</span>
                   </p>
                 </div>
               ) : (
@@ -943,11 +1375,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     Klik untuk Pilih Foto Dokumen atau Seret File ke Sini
                   </span>
                   <span className="text-xs text-slate-500 mt-1">
-                    Format: JPG, PNG, WEBP (Maksimal 10MB)
+                    Format: JPG, PNG, WEBP, atau PDF (Maksimal 4MB)
                   </span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,application/pdf,.pdf"
                     onChange={handleFileUpload}
                     className="hidden"
                   />
@@ -971,12 +1403,18 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <p className="text-[11px] text-slate-500 -mt-1">{req.description}</p>
                   {filled ? (
                     <div className="flex items-center gap-3 border border-emerald-200 bg-emerald-50/50 rounded-2xl p-3">
-                      <img src={f.base64} alt={req.title} className="w-16 h-12 object-cover rounded-lg border border-slate-200 bg-white shrink-0" />
+                      {isPdfDataUrl(f.base64) ? (
+                        <span className="w-16 h-12 rounded-lg border border-slate-200 bg-slate-100 flex items-center justify-center shrink-0">
+                          <span className="material-symbols-outlined text-[24px] text-red-500">picture_as_pdf</span>
+                        </span>
+                      ) : (
+                        <img src={f.base64} alt={req.title} className="w-16 h-12 object-cover rounded-lg border border-slate-200 bg-white shrink-0" />
+                      )}
                       <span className="text-xs font-semibold text-[#0F172A] truncate flex-1">{f.name}</span>
                       <span className="text-xs text-emerald-700 font-semibold hidden sm:inline">Terunggah</span>
                       <label className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-[#0F172A] text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
                         Ganti
-                        <input type="file" accept="image/*" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
+                        <input type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
                       </label>
                       <button type="button" onClick={() => removeSupportFile(i)} className="px-3 py-1.5 rounded-lg bg-white border border-red-200 hover:bg-red-50 text-red-700 text-xs font-semibold cursor-pointer shrink-0">
                         Hapus
@@ -989,14 +1427,16 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       </span>
                       <span>
                         <span className="block text-xs font-bold text-[#0F172A]">Klik untuk unggah {req.title}</span>
-                        <span className="block text-[11px] text-slate-500 mt-0.5">Format: JPG, PNG, WEBP (Maksimal 10MB)</span>
+                        <span className="block text-[11px] text-slate-500 mt-0.5">Format: JPG, PNG, WEBP, atau PDF (Maksimal 4MB)</span>
                       </span>
-                      <input type="file" accept="image/*" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
+                      <input type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
                     </label>
                   )}
                 </div>
               );
             })}
+              </>
+            )}
 
             {/* UU PDP Compliance Notice */}
             <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl p-4 flex items-start gap-3 text-xs text-emerald-900 leading-relaxed">
@@ -1170,12 +1610,112 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   );
                 })()}
 
+                {/* Peta Area Kurang Jelas — overlay bbox di atas pratinjau foto */}
+                {(() => {
+                  const areas = verificationResult.blur_areas || [];
+                  const bukanKtp =
+                    verificationResult.jenis_dokumen === "LAINNYA" ||
+                    /bukan kartu kependudukan/i.test(verificationResult.catatan || "");
+                  if (!docImageBase64 || bukanKtp) return null;
+                  return (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                      <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between gap-3">
+                        <div>
+                          <span className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                            Peta Area Kurang Jelas
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            {areas.length > 0
+                              ? `${areas.length} area terdeteksi — posisi pada foto bersifat perkiraan.`
+                              : "Tidak ada area bermasalah yang terdeteksi pada dokumen."}
+                          </span>
+                        </div>
+                        {areas.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowBlurAreas((v) => !v)}
+                            className="shrink-0 px-2.5 py-1 rounded-lg border border-slate-300 text-[11px] font-semibold text-slate-600 hover:bg-white transition-colors cursor-pointer"
+                          >
+                            {showBlurAreas ? "Sembunyikan area" : "Tampilkan area"}
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="p-3 sm:p-4 bg-slate-900 flex justify-center">
+                        {isPdfDataUrl(docImageBase64) ? (
+                          <div className="flex flex-col items-center justify-center gap-2 px-6 py-10 text-slate-300 text-center">
+                            <span className="material-symbols-outlined text-[56px] text-red-400">picture_as_pdf</span>
+                            <p className="text-xs text-slate-300 font-semibold">
+                              Pratinjau overlay tidak tersedia untuk PDF
+                            </p>
+                            <p className="text-[11px] text-slate-400 max-w-xs">
+                              Area buram tetap terdaftar di bawah berdasarkan koordinat halaman PDF.
+                              Untuk melihat kotak overlay, unggah ulang sebagai foto JPG/PNG.
+                            </p>
+                            <p className="text-[11px] text-slate-500 font-code-num truncate max-w-[260px]">
+                              {docImageName}
+                            </p>
+                          </div>
+                        ) : (
+                        <div className="relative inline-block max-w-full">
+                          <img
+                            src={docImageBase64}
+                            alt="Pratinjau dokumen yang dipindai"
+                            className="block max-h-[420px] w-auto max-w-full rounded-lg select-none"
+                          />
+                          {showBlurAreas &&
+                            areas.map((a, i) => {
+                              const style = BLUR_SEVERITY_STYLE[a.severity] || BLUR_SEVERITY_STYLE.medium;
+                              return (
+                                <div
+                                  key={`blur-box-${i}`}
+                                  className={`absolute rounded-md border-2 ${style.box}`}
+                                  style={{
+                                    left: `${a.bbox[0]}%`,
+                                    top: `${a.bbox[1]}%`,
+                                    width: `${a.bbox[2]}%`,
+                                    height: `${a.bbox[3]}%`,
+                                  }}
+                                >
+                                  <span
+                                    className={`absolute left-0 -top-0.5 -translate-y-full whitespace-nowrap rounded-t-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${style.chip}`}
+                                  >
+                                    {blurAreaLabel(a.area)}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                        </div>
+                        )}
+                      </div>
+
+                      {areas.length > 0 && (
+                        <ul className="divide-y divide-slate-100 text-xs">
+                          {areas.map((a, i) => {
+                            const style = BLUR_SEVERITY_STYLE[a.severity] || BLUR_SEVERITY_STYLE.medium;
+                            return (
+                              <li key={`blur-row-${i}`} className="flex items-start gap-2 px-4 py-2">
+                                <span className={`mt-1 w-2.5 h-2.5 rounded-sm shrink-0 ${style.dot}`} />
+                                <div className="min-w-0">
+                                  <span className="font-semibold text-[#0F172A]">{blurAreaLabel(a.area)}</span>
+                                  <span className="text-slate-400"> — {style.label}</span>
+                                  {a.description && <span className="text-slate-500"> ({a.description})</span>}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Extracted Comparison Table */}
                 <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
                   <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
                     <span>Hasil Ekstraksi OCR Mesin AI vs Formulir</span>
                     <span className="text-slate-400 font-normal normal-case">
-                      Model: Gemini 3.6 Flash Engine
+                      Model: Gemini Vision (fallback otomatis)
                     </span>
                   </div>
                   <div className="divide-y divide-slate-100 text-xs">
@@ -1417,6 +1957,54 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal konfirmasi keluar — data tetap tersimpan sebagai draft */}
+      {exitConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="exit-wizard-title"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 p-5 sm:p-6">
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[24px]">draft</span>
+              </div>
+              <div>
+                <h3 id="exit-wizard-title" className="text-base font-bold text-slate-900">
+                  Keluar dari pengisian?
+                </h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Data yang sudah Anda isi disimpan sebagai draft di browser ini selama 24 jam,
+                  termasuk foto/PDF. Anda bisa melanjutkannya nanti.
+                </p>
+                {draftSavedAt && (
+                  <p className="text-[11px] text-emerald-700 font-semibold mt-2">
+                    Draft terakhir tersimpan {formatDraftTime(draftSavedAt)}.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                onClick={handleContinueFilling}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-xs sm:text-sm font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Lanjutkan mengisi
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmExit()}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-[#2563eb] text-white text-xs sm:text-sm font-bold hover:bg-blue-700 transition-colors cursor-pointer"
+              >
+                Keluar (draft tersimpan)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

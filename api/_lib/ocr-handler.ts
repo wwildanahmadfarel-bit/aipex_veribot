@@ -31,6 +31,7 @@ import {
 import { isTurnstileConfigured, verifyTurnstile } from "./turnstile.js";
 import { sha256Hex, validateUploadBuffer } from "./file-guard.js";
 import { getCachedOcr, setCachedOcr } from "./ocr-cache.js";
+import { isUsableAiParsed } from "./ai-response-guard.js";
 import { logOcrAttempt } from "./abuse-log.js";
 
 const OCR_SYSTEM = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga / KK, dan Akta Kelahiran).
@@ -62,14 +63,84 @@ Tugas utama Anda:
    - "BURAM": Dokumen kependudukan asli (KTP/KK/AKTA), namun skor kejelasan < 70 (memerlukan foto ulang).
    - "TIDAK_VALID": WAJIB dipakai jika jenis_dokumen "LAINNYA" (gambar bukan dokumen kependudukan resmi Indonesia).
 
-6. Catatan Perbaikan (Saran Singkat):
+6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen KTP/KK/AKTA):
+   - Identifikasi bagian dokumen yang buram, silau, gelap, terpotong, atau tidak terbaca.
+   - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", atau "lainnya".
+   - "severity": "high" (teks kunci tidak terbaca), "medium" (terbaca sebagian), "low" (terbaca namun kurang tajam).
+   - "bbox": [x, y, width, height] dalam PERSEN 0-100 relatif terhadap gambar, (x, y) = pojok kiri atas area. Perkiraan posisi yang wajar sudah cukup.
+   - "description": penyebab singkat, contoh "motion blur", "silau flash", "kurang cahaya", "bayangan", "terpotong", "out of focus".
+   - Contoh: [{"area":"nik","severity":"high","bbox":[8,42,46,9],"description":"silau flash"}].
+   - Jika seluruh foto tajam (skor >= 80) atau dokumen LAINNYA, kembalikan array kosong [].
+
+7. Catatan Perbaikan (Saran Singkat):
    - Jika status BURAM, berikan 1 kalimat saran konkret (contoh: "Foto KTP terlalu silau di area NIK, harap matikan lampu flash dan ambil ulang foto di tempat terang").
    - Jika status TIDAK_VALID, WAJIB awali catatan dengan kalimat persis: "File bukan Kartu Kependudukan Indonesia." lalu lanjutkan saran unggah e-KTP asli.
 
-PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan.`;
+PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan, blur_areas.`;
 
 const OCR_USER_PROMPT =
   "Analisis foto dokumen kependudukan ini. Periksa kejelasan teks, ekstrak NIK 16 digit jika ada, dan tentukan apakah foto layak untuk verifikasi.";
+
+/** Batas maksimum area yang ditampilkan agar overlay tidak menutupi seluruh foto. */
+const MAX_BLUR_AREAS = 4;
+
+export type BlurArea = {
+  area: string;
+  severity: "high" | "medium" | "low";
+  /** [x, y, width, height] dalam persen (0-100) relatif terhadap gambar. */
+  bbox: [number, number, number, number];
+  description: string;
+};
+
+/**
+ * Validasi & normalisasi `blur_areas` dari AI.
+ * AI bisa mengembalikan koordinat desimal, di luar batas, atau field rusak —
+ * jangan sampai seluruh pindaian gagal hanya karena overlay bermasalah.
+ */
+function sanitizeBlurAreas(raw: unknown): BlurArea[] {
+  if (!Array.isArray(raw)) return [];
+  const rank: Record<BlurArea["severity"], number> = { high: 0, medium: 1, low: 2 };
+  const out: BlurArea[] = [];
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const it = item as any;
+    const bboxRaw = Array.isArray(it.bbox) ? it.bbox : null;
+    if (!bboxRaw || bboxRaw.length !== 4) continue;
+
+    const nums = bboxRaw.map((v: unknown) => Number(v));
+    if (nums.some((n: number) => !Number.isFinite(n))) continue;
+
+    const clamp = (n: number) => Math.max(0, Math.min(100, n));
+    let [x, y, w, h] = nums.map(clamp);
+    if (x >= 100 || y >= 100) continue;
+    w = Math.min(w, 100 - x);
+    h = Math.min(h, 100 - y);
+    // Abaikan kotak yang terlalu kecil untuk terlihat (noise dari model).
+    if (w < 2 || h < 2) continue;
+
+    const area = String(it.area ?? "lainnya").trim().toLowerCase().slice(0, 40) || "lainnya";
+    const sevRaw = String(it.severity ?? "").trim().toLowerCase();
+    const severity: BlurArea["severity"] =
+      sevRaw === "high" || sevRaw === "medium" || sevRaw === "low" ? (sevRaw as BlurArea["severity"]) : "medium";
+
+    out.push({
+      area,
+      severity,
+      bbox: [
+        Math.round(x * 10) / 10,
+        Math.round(y * 10) / 10,
+        Math.round(w * 10) / 10,
+        Math.round(h * 10) / 10,
+      ],
+      description: String(it.description ?? "").trim().slice(0, 120),
+    });
+  }
+
+  out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return out.slice(0, MAX_BLUR_AREAS);
+}
+
 
 async function extractImage(req: any): Promise<{ fileBytes: Buffer | null; mimeType: string; bodyFields: any }> {
   const contentType = String(req.headers?.["content-type"] || "");
@@ -244,7 +315,7 @@ export async function handleOcr(req: any, res: any) {
     const naraConfigured = isNaraConfigured(naraApiKey);
     const client: GoogleGenAI | null = getGeminiClient();
 
-    const ocrModels = ["gemini-2.5-flash", "gemini-3.6-flash"];
+    const ocrModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
     let responseText = "";
     let lastAiError = "";
     const isPdf = /pdf/i.test(mimeType || "");
@@ -252,7 +323,12 @@ export async function handleOcr(req: any, res: any) {
     if (!skipAi) {
     // Prioritas 1: Gemini (utama — mendukung gambar + PDF).
     if (!responseText && client) {
+      const aiDeadline = Date.now() + 50_000;
       for (const modelName of ocrModels) {
+        if (Date.now() >= aiDeadline) {
+          lastAiError = "Batas waktu OCR AI habis sebelum semua model dicoba";
+          break;
+        }
         try {
           const response = await client.models.generateContent({
             model: modelName,
@@ -264,6 +340,9 @@ export async function handleOcr(req: any, res: any) {
               systemInstruction: OCR_SYSTEM,
               responseMimeType: "application/json",
               temperature: 0.0,
+              maxOutputTokens: 8192,
+              // Batasi tiap model agar kegagalan jaringan tidak menggantung lama.
+              httpOptions: { timeout: 18000 },
               responseSchema: {
                 type: "OBJECT",
                 properties: {
@@ -273,15 +352,40 @@ export async function handleOcr(req: any, res: any) {
                   skor_kejelasan: { type: "INTEGER" },
                   status_verifikasi: { type: "STRING" },
                   catatan: { type: "STRING" },
+                  blur_areas: {
+                    type: "ARRAY",
+                    items: {
+                      type: "OBJECT",
+                      properties: {
+                        area: { type: "STRING" },
+                        severity: { type: "STRING" },
+                        description: { type: "STRING" },
+                        bbox: {
+                          type: "ARRAY",
+                          items: { type: "NUMBER" },
+                        },
+                      },
+                      required: ["area", "severity", "bbox"],
+                    },
+                  },
                 },
-                required: ["jenis_dokumen", "skor_kejelasan", "status_verifikasi"],
+                required: ["jenis_dokumen", "skor_kejelasan", "status_verifikasi", "blur_areas"],
               },
             },
           });
-          if (response && (response as any).text) {
-            responseText = (response as any).text;
-            aiSource = "gemini";
-            break;
+          const candidateText = (response as any)?.text;
+          if (candidateText) {
+            try {
+              const candidate = parseAiJsonResponse(candidateText);
+              if (isUsableAiParsed(candidate)) {
+                responseText = candidateText;
+                aiSource = "gemini";
+                break;
+              }
+              lastAiError = `Gemini ${modelName}: jawaban tidak lengkap / terindikasi halusinasi`;
+            } catch {
+              lastAiError = `Gemini ${modelName}: JSON tidak valid`;
+            }
           }
         } catch (modelErr: any) {
           lastAiError = `Gemini ${modelName}: ${modelErr?.message || modelErr}`;
@@ -292,15 +396,31 @@ export async function handleOcr(req: any, res: any) {
     // Prioritas 2 (cadangan): nara-route — hanya image (PDF dilewati).
     if (!responseText && naraConfigured && !isPdf) {
       try {
-        responseText = await visionViaNaraRoute({
+        const naraText = await visionViaNaraRoute({
           apiKey: naraApiKey,
-          model: (bodyFields?.naraModel as string) || process.env.NARA_ROUTE_MODEL || undefined,
+          model:
+            ((bodyFields?.naraModel || bodyFields?.bynaraModel) as string) ||
+            process.env.NARA_ROUTE_MODEL ||
+            process.env.BYNARA_MODEL ||
+            undefined,
           systemPrompt: OCR_SYSTEM,
           userPrompt: OCR_USER_PROMPT,
           imageBase64: fileBytes.toString("base64"),
           mimeType,
         });
-        if (responseText) aiSource = "nara-route";
+        if (naraText) {
+          try {
+            const candidate = parseAiJsonResponse(naraText);
+            if (isUsableAiParsed(candidate)) {
+              responseText = naraText;
+              aiSource = "nara-route";
+            } else {
+              lastAiError = "nara-route: jawaban tidak lengkap / terindikasi halusinasi";
+            }
+          } catch {
+            lastAiError = "nara-route: JSON tidak valid";
+          }
+        }
       } catch (naraErr: any) {
         lastAiError = `nara-route: ${naraErr?.message || naraErr}`;
       }
@@ -311,7 +431,7 @@ export async function handleOcr(req: any, res: any) {
       return res.status(503).json({
         success: false,
         isSystemError: true,
-        message: "Layanan AI OCR belum dikonfigurasi (GEMINI_API_KEY / NARA_ROUTE_API_KEY kosong). Bukan salah foto Anda — lanjut isi formulir manual atau hubungi petugas untuk verifikasi manual.",
+        message: "Layanan AI OCR belum dikonfigurasi (GEMINI_API_KEY / NARA_ROUTE_API_KEY / BYNARA_API_KEY kosong). Bukan salah foto Anda — lanjut isi formulir manual atau hubungi petugas untuk verifikasi manual.",
         data: {
           nik: null, nama: null, jenis_dokumen: "LAINNYA", skor_kejelasan: 0,
           status_verifikasi: "TIDAK_VALID", status_kualitas: "TIDAK_LAYAK",
@@ -383,14 +503,25 @@ export async function handleOcr(req: any, res: any) {
     }
     parsed.skor_kejelasan = Math.max(0, Math.min(100, Math.round(parsed.skor_kejelasan)));
 
+    // Overlay area buram: selalu array valid agar frontend tak perlu guard berlapis.
+    parsed.blur_areas = sanitizeBlurAreas(parsed.blur_areas);
+
     if (parsed.nik) {
-      const nikClean = String(parsed.nik).replace(/\D/g, "");
-      if (nikClean.length !== 16) {
-        if (nikClean.length >= 8) parsed.nik_partial = nikClean;
+      // Hanya terima NIK yang benar-benar 16 digit setelah membuang label/pemisah.
+      // Jangan sekadar membuang SEMUA non-digit: teks sampah dari model bisa
+      // menyisakan 16 digit palsu (mis. "3201...Drafting note...").
+      const nikRaw = String(parsed.nik).trim().replace(/^NIK\b[:\s]*/i, "");
+      const nikClean = nikRaw.replace(/[\s.\-:/]/g, "");
+      const nikDigits = nikClean.replace(/\D/g, "");
+      if (!/^\d{16}$/.test(nikClean)) {
+        if (nikDigits.length >= 8) parsed.nik_partial = nikDigits;
         parsed.nik = null;
         if (parsed.status_verifikasi === "BERHASIL") {
           parsed.status_verifikasi = "BURAM";
-          parsed.catatan = `NIK terbaca sebagian (${nikClean.length || 0}/16 digit). Foto ulang e-KTP dengan fokus tajam tanpa silau.`;
+          parsed.catatan =
+            nikDigits.length === 16
+              ? "Format NIK tidak valid (ada karakter tambahan). Foto ulang e-KTP dengan fokus tajam tanpa silau."
+              : `NIK terbaca sebagian (${nikDigits.length || 0}/16 digit). Foto ulang e-KTP dengan fokus tajam tanpa silau.`;
         }
       } else {
         parsed.nik = nikClean;
@@ -408,6 +539,8 @@ export async function handleOcr(req: any, res: any) {
     if (parsed.status_verifikasi === "TIDAK_VALID") {
       parsed.jenis_dokumen = "LAINNYA";
       parsed.nik = null;
+      // Bukan dokumen kependudukan → overlay area tidak relevan.
+      parsed.blur_areas = [];
       if (!parsed.nama || typeof parsed.nama !== "string") parsed.nama = null as any;
       if (typeof parsed.skor_kejelasan !== "number" || parsed.skor_kejelasan > 25) {
         parsed.skor_kejelasan = typeof parsed.skor_kejelasan === "number" ? Math.min(parsed.skor_kejelasan, 20) : 0;

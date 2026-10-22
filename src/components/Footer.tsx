@@ -4,9 +4,10 @@ interface FooterProps {
   onNavigateHome: () => void;
   /** Navigasi terjaga ke section portal (melewati popup konfirmasi saat mode officer). */
   onRequestNav?: (targetId: string, destLabel: string) => void;
+  onOpenTransparansi?: () => void;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigateHome, onRequestNav }) => {
+export const Footer: React.FC<FooterProps> = ({ onNavigateHome, onRequestNav, onOpenTransparansi }) => {
   const goSection = (targetId: string, destLabel: string) => {
     if (onRequestNav) {
       onRequestNav(targetId, destLabel);
@@ -113,6 +114,16 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateHome, onRequestNav }) 
       <div className="max-w-[1200px] mx-auto pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
         <p>© 2026 Pemerintah Kelurahan Sukamaju & Ditjen Dukcapil. Hak Cipta Dilindungi.</p>
         <div className="flex items-center gap-4">
+          {onOpenTransparansi && (
+            <button
+              type="button"
+              onClick={onOpenTransparansi}
+              className="text-slate-400 hover:text-white transition-colors cursor-pointer flex items-center gap-1"
+            >
+              <span className="material-symbols-outlined text-[14px]">analytics</span>
+              <span>Transparansi AI (Tier-1 Publik)</span>
+            </button>
+          )}
           <span className="text-slate-400 flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
             Sistem Terhubung Ditjen Dukcapil Kemendagri

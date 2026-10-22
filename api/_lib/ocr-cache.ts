@@ -4,6 +4,7 @@
 // (tiket tetap diterbitkan unik per request agar QR tidak dobel).
 
 import { redisGet, redisSet } from "./rate-limit.js";
+import { isUsableAiParsed } from "./ai-response-guard.js";
 
 const MEM = new Map<string, { exp: number; value: any }>();
 const MEM_CAP = 300;
@@ -14,10 +15,10 @@ function cacheKey(fileHash: string): string {
 }
 
 export function isCacheableParsed(parsed: any): boolean {
-  if (!parsed || typeof parsed !== "object") return false;
-  // Hanya cache hasil valid (BERHASIL/BURAM). TIDAK_VALID murah-ish tapi tetap
-  // bermanfaat di-cache agar spam file sampah tidak memakan token.
-  return true;
+  if (!isUsableAiParsed(parsed)) return false;
+  // Hanya cache status final yang sudah dinormalisasi backend.
+  const status = String(parsed.status_verifikasi || "").toUpperCase();
+  return ["BERHASIL", "BURAM", "TIDAK_VALID"].includes(status);
 }
 
 export async function getCachedOcr(fileHash: string): Promise<any | null> {
@@ -26,11 +27,13 @@ export async function getCachedOcr(fileHash: string): Promise<any | null> {
   if (hit) {
     try {
       const parsed = JSON.parse(hit);
-      if (parsed && typeof parsed === "object") return { ...parsed, _cacheHit: true };
+      if (isCacheableParsed(parsed)) return { ...parsed, _cacheHit: true };
     } catch {}
   }
   const m = MEM.get(fileHash);
-  if (m && m.exp > Date.now()) return { ...m.value, _cacheHit: true };
+  if (m && m.exp > Date.now() && isCacheableParsed(m.value)) {
+    return { ...m.value, _cacheHit: true };
+  }
   if (m) MEM.delete(fileHash);
   return null;
 }

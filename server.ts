@@ -23,19 +23,35 @@ import { isTurnstileConfigured, verifyTurnstile } from "./api/_lib/turnstile";
 import { PHOTO_PURGE_AUDIT_NOTE, sha256Hex, validateUploadBuffer } from "./api/_lib/file-guard";
 import { hapusFotoTiket } from "./api/_lib/tiket-foto";
 import { getCachedOcr, setCachedOcr } from "./api/_lib/ocr-cache";
+import { isUsableAiParsed } from "./api/_lib/ai-response-guard";
 import { logOcrAttempt } from "./api/_lib/abuse-log";
 import { classifyAiFailure } from "./api/_lib/ai-errors";
 import { WaError, isWaEnabled, normalizeWa, sendFonnteWa, ticketStatusMessage } from "./api/_lib/wa";
 import { isOfficerJwtConfigured, officerUnauthorized, requireOfficer, signOfficerToken } from "./api/_lib/officer-auth";
 import {
   AI_PROVIDERS,
+  chatCompletionViaBynara,
+  chatCompletionViaBynaraRoute,
   chatCompletionViaNaraRoute,
+  chatCompletionViaOpenRouter,
+  getBynaraApiKey,
+  getBynaraBaseURL,
+  getBynaraRouteApiKey,
+  getBynaraRouteBaseURL,
   getNaraRouteApiKey,
   getNaraRouteBaseURL,
+  getOpenRouterApiKey,
+  getOpenRouterBaseURL,
+  isBynaraConfigured,
+  isBynaraRouteConfigured,
   isNaraRouteConfigured,
+  isOpenRouterConfigured,
   logAiKeyStatus,
   validateAiKeys,
+  visionViaBynara,
+  visionViaBynaraRoute,
   visionViaNaraRoute,
+  visionViaOpenRouter,
 } from "./services/ai_providers";
 
 // Load env dari .env.local / .env agar SUPABASE_URL & KEY terbaca saat `tsx server.ts`
@@ -140,6 +156,60 @@ function parseAiJsonResponse(rawText: string): any {
     return JSON.parse(text.slice(start, end + 1));
   }
   throw new Error("AI mengembalikan format tak valid, coba ulangi pindaian.");
+}
+
+/** Batas maksimum area buram yang ditampilkan (samakan dengan api/_lib/ocr-handler.ts). */
+const MAX_BLUR_AREAS = 4;
+
+type BlurArea = {
+  area: string;
+  severity: "high" | "medium" | "low";
+  bbox: [number, number, number, number];
+  description: string;
+};
+
+/** Validasi & normalisasi `blur_areas` dari AI agar overlay tak pernah merusak pindaian. */
+function sanitizeBlurAreas(raw: unknown): BlurArea[] {
+  if (!Array.isArray(raw)) return [];
+  const rank: Record<BlurArea["severity"], number> = { high: 0, medium: 1, low: 2 };
+  const out: BlurArea[] = [];
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const it = item as any;
+    const bboxRaw = Array.isArray(it.bbox) ? it.bbox : null;
+    if (!bboxRaw || bboxRaw.length !== 4) continue;
+
+    const nums = bboxRaw.map((v: unknown) => Number(v));
+    if (nums.some((n: number) => !Number.isFinite(n))) continue;
+
+    const clamp = (n: number) => Math.max(0, Math.min(100, n));
+    let [x, y, w, h] = nums.map(clamp);
+    if (x >= 100 || y >= 100) continue;
+    w = Math.min(w, 100 - x);
+    h = Math.min(h, 100 - y);
+    if (w < 2 || h < 2) continue;
+
+    const area = String(it.area ?? "lainnya").trim().toLowerCase().slice(0, 40) || "lainnya";
+    const sevRaw = String(it.severity ?? "").trim().toLowerCase();
+    const severity: BlurArea["severity"] =
+      sevRaw === "high" || sevRaw === "medium" || sevRaw === "low" ? (sevRaw as BlurArea["severity"]) : "medium";
+
+    out.push({
+      area,
+      severity,
+      bbox: [
+        Math.round(x * 10) / 10,
+        Math.round(y * 10) / 10,
+        Math.round(w * 10) / 10,
+        Math.round(h * 10) / 10,
+      ],
+      description: String(it.description ?? "").trim().slice(0, 120),
+    });
+  }
+
+  out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return out.slice(0, MAX_BLUR_AREAS);
 }
 
 // Initialize Supabase Client (sanitized to remove any trailing /rest/v1 or slashes causing PGRST125)
@@ -305,20 +375,75 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-// --- Global provider: nara-route -------------------------------------------
+// --- Global provider: nara-route / bynara -------------------------------------------
 // API key diinput sendiri oleh user via salah satu cara berikut (prioritas):
-//  1. Header:  x-nara-route-api-key: <key>
-//  2. Body:    { naraApiKey: "<key>" } atau { apiKey: "<key>" } (khusus chat/ocr)
-//  3. Env:     NARA_ROUTE_API_KEY di .env.local / .env
+//  1. Header:  x-nara-route-api-key / x-bynara-api-key / x-bynara-route-api-key
+//  2. Body:    { naraApiKey, bynaraApiKey, apiKey, key } (khusus chat/ocr)
+//  3. Env:     NARA_ROUTE_API_KEY / BYNARA_API_KEY / BYNARA_ROUTE_API_KEY di .env.local / .env
 function extractNaraApiKey(req: any): string {
   const fromHeader =
-    req?.headers?.["x-nara-route-api-key"] || req?.headers?.["x-nara-api-key"];
-  const fromBody = req?.body?.naraApiKey || req?.body?.nara_route_api_key;
+    req?.headers?.["x-nara-route-api-key"] ||
+    req?.headers?.["x-nara-api-key"] ||
+    req?.headers?.["x-bynara-api-key"] ||
+    req?.headers?.["x-bynara-route-api-key"];
+  const fromBody =
+    req?.body?.naraApiKey ||
+    req?.body?.nara_route_api_key ||
+    req?.body?.bynaraApiKey ||
+    req?.body?.bynara_api_key ||
+    req?.body?.bynaraRouteApiKey ||
+    req?.body?.apiKey ||
+    req?.body?.key;
   const picked =
     (typeof fromHeader === "string" && fromHeader.trim()) ||
     (typeof fromBody === "string" && fromBody.trim()) ||
     "";
-  return getNaraRouteApiKey(picked);
+  return getNaraRouteApiKey(picked) || getBynaraApiKey(picked) || picked;
+}
+
+function extractBynaraApiKey(req: any): string {
+  const fromHeader =
+    req?.headers?.["x-bynara-api-key"] ||
+    req?.headers?.["x-bynara-route-api-key"] ||
+    req?.headers?.["x-nara-route-api-key"] ||
+    req?.headers?.["x-nara-api-key"];
+  const fromBody =
+    req?.body?.bynaraApiKey ||
+    req?.body?.bynara_api_key ||
+    req?.body?.bynaraRouteApiKey ||
+    req?.body?.naraApiKey ||
+    req?.body?.nara_route_api_key ||
+    req?.body?.apiKey ||
+    req?.body?.key;
+  const picked =
+    (typeof fromHeader === "string" && fromHeader.trim()) ||
+    (typeof fromBody === "string" && fromBody.trim()) ||
+    "";
+  return getBynaraApiKey(picked) || picked;
+}
+
+// --- Global provider: OpenRouter (9router) -------------------------------------------
+// API key diinput sendiri oleh user via:
+//  1. Header:  x-openrouter-api-key / x-9router-api-key
+//  2. Body:    { openrouterApiKey, nineRouterApiKey, apiKey, key }
+//  3. Env:     OPENROUTER_API_KEY / 9ROUTER_API_KEY di .env.local / .env
+function extractOpenRouterApiKey(req: any): string {
+  const fromHeader =
+    req?.headers?.["x-openrouter-api-key"] ||
+    req?.headers?.["x-9router-api-key"] ||
+    req?.headers?.["x-open-router-api-key"];
+  const fromBody =
+    req?.body?.openrouterApiKey ||
+    req?.body?.openrouter_api_key ||
+    req?.body?.nineRouterApiKey ||
+    req?.body?.nine_router_api_key ||
+    req?.body?.apiKey ||
+    req?.body?.key;
+  const picked =
+    (typeof fromHeader === "string" && fromHeader.trim()) ||
+    (typeof fromBody === "string" && fromBody.trim()) ||
+    "";
+  return getOpenRouterApiKey(picked) || picked;
 }
 
 async function startServer() {
@@ -328,11 +453,14 @@ async function startServer() {
   app.use(express.json({ limit: "25mb" }));
   app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
-  // CORS for local API access (termasuk header kunci Nara manual via frontend)
+  // CORS for local API access (termasuk header kunci Nara/OpenRouter manual via frontend)
   app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-nara-route-api-key, x-nara-api-key");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, x-nara-route-api-key, x-nara-api-key, x-bynara-api-key, x-bynara-route-api-key, x-openrouter-api-key, x-9router-api-key, x-open-router-api-key"
+    );
     if (req.method === "OPTIONS") {
       res.sendStatus(200);
       return;
@@ -372,7 +500,7 @@ async function startServer() {
       ...(!ocrReady
         ? {
             warning:
-              "Tidak ada provider AI yang siap — pindaian OCR akan gagal (502). Isi NARA_ROUTE_API_KEY dan/atau GEMINI_API_KEY yang valid lalu restart server.",
+              "Tidak ada provider AI yang siap — pindaian OCR akan gagal (502). Isi NARA_ROUTE_API_KEY / BYNARA_API_KEY dan/atau GEMINI_API_KEY yang valid lalu restart server.",
           }
         : {}),
     });
@@ -384,19 +512,32 @@ async function startServer() {
     const keyStatus = Object.fromEntries(validateAiKeys().map((k) => [k.provider, k]));
     res.json({
       success: true,
-      providers: Object.values(AI_PROVIDERS).map((p) => ({
-        name: p.name,
-        baseURL: p.name === "nara-route" ? getNaraRouteBaseURL() : p.baseURL,
-        type: p.type,
-        defaultModel: p.name === "nara-route"
-          ? process.env.NARA_ROUTE_MODEL || p.defaultModel
-          : p.defaultModel,
-        configured: keyStatus[p.name]?.ready ?? false,
-        formatOk: keyStatus[p.name]?.formatOk ?? false,
-        isPlaceholder: keyStatus[p.name]?.isPlaceholder ?? false,
-        hint: keyStatus[p.name]?.hint ?? "",
-        apiKeyEnv: p.apiKeyEnv,
-      })),
+      providers: Object.values(AI_PROVIDERS).map((p) => {
+        let baseURL = p.baseURL;
+        if (p.name === "nara-route") baseURL = getNaraRouteBaseURL();
+        else if (p.name === "bynara" || p.name === "bynara-router") baseURL = getBynaraBaseURL();
+        else if (p.name === "openrouter") baseURL = getOpenRouterBaseURL();
+        let defaultModel = p.defaultModel;
+        if (p.name === "nara-route") defaultModel = process.env.NARA_ROUTE_MODEL || p.defaultModel;
+        else if (p.name === "bynara")
+          defaultModel = process.env.BYNARA_MODEL || process.env.NARA_ROUTE_MODEL || p.defaultModel;
+        else if (p.name === "bynara-router")
+          defaultModel =
+            process.env.BYNARA_ROUTE_MODEL || process.env.BYNARA_MODEL || process.env.NARA_ROUTE_MODEL || p.defaultModel;
+        else if (p.name === "openrouter")
+          defaultModel = process.env.OPENROUTER_MODEL || process.env.NINE_ROUTER_MODEL || p.defaultModel;
+        return {
+          name: p.name,
+          baseURL,
+          type: p.type,
+          defaultModel,
+          configured: keyStatus[p.name]?.ready ?? false,
+          formatOk: keyStatus[p.name]?.formatOk ?? false,
+          isPlaceholder: keyStatus[p.name]?.isPlaceholder ?? false,
+          hint: keyStatus[p.name]?.hint ?? "",
+          apiKeyEnv: p.apiKeyEnv,
+        };
+      }),
     });
   });
 
@@ -502,8 +643,9 @@ async function startServer() {
         });
       }
 
-      const naraApiKey = extractNaraApiKey(req);
-      const naraConfigured = isNaraRouteConfigured(naraApiKey);
+      // Kunci provider router.bynara.id: "nara-route" dulu, fallback ke alias "bynara".
+      const naraApiKey = extractNaraApiKey(req) || extractBynaraApiKey(req);
+      const naraConfigured = isNaraRouteConfigured(naraApiKey) || isBynaraConfigured(naraApiKey);
       const client = getGeminiClient();
 
       const systemInstructionText = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga / KK, dan Akta Kelahiran).
@@ -535,15 +677,25 @@ Tugas utama Anda:
    - "BURAM": Dokumen kependudukan asli (KTP/KK/AKTA), namun skor kejelasan < 70 (memerlukan foto ulang).
    - "TIDAK_VALID": WAJIB dipakai jika jenis_dokumen "LAINNYA" (gambar bukan dokumen kependudukan resmi Indonesia).
 
-6. Catatan Perbaikan (Saran Singkat):
+6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen KTP/KK/AKTA):
+   - Identifikasi bagian dokumen yang buram, silau, gelap, terpotong, atau tidak terbaca.
+   - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", atau "lainnya".
+   - "severity": "high" (teks kunci tidak terbaca), "medium" (terbaca sebagian), "low" (terbaca namun kurang tajam).
+   - "bbox": [x, y, width, height] dalam PERSEN 0-100 relatif terhadap gambar, (x, y) = pojok kiri atas area. Perkiraan posisi yang wajar sudah cukup.
+   - "description": penyebab singkat, contoh "motion blur", "silau flash", "kurang cahaya", "bayangan", "terpotong", "out of focus".
+   - Contoh: [{"area":"nik","severity":"high","bbox":[8,42,46,9],"description":"silau flash"}].
+   - Jika seluruh foto tajam (skor >= 80) atau dokumen LAINNYA, kembalikan array kosong [].
+
+7. Catatan Perbaikan (Saran Singkat):
    - Jika status BURAM, berikan 1 kalimat saran konkret (contoh: "Foto KTP terlalu silau di area NIK, harap matikan lampu flash dan ambil ulang foto di tempat terang").
    - Jika status TIDAK_VALID, WAJIB awali catatan dengan kalimat persis: "File bukan Kartu Kependudukan Indonesia." lalu lanjutkan saran unggah e-KTP asli.
 
-PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan.`;
+PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan, blur_areas.`;
 
       const userPrompt = "Analisis foto dokumen kependudukan ini. Periksa kejelasan teks, ekstrak NIK 16 digit jika ada, dan tentukan apakah foto layak untuk verifikasi.";
 
-      const ocrModels = ["gemini-2.5-flash", "gemini-3.6-flash"];
+      // Urutan fallback: model terbaru dulu; yang deprecated/penuh dilewati otomatis.
+      const ocrModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
       let responseText = "";
       let lastAiError = "";
       const isPdf = /pdf/i.test(mimeType || "");
@@ -551,7 +703,12 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       // Prioritas 1: Gemini (utama — mendukung gambar + PDF).
       // Cache hit: lewati semua panggilan AI (hemat token).
       if (!skipAi && !responseText && client) {
+        const aiDeadline = Date.now() + 50_000;
         for (const modelName of ocrModels) {
+        if (Date.now() >= aiDeadline) {
+          lastAiError = "Batas waktu OCR AI habis sebelum semua model dicoba";
+          break;
+        }
         try {
           const response = await client.models.generateContent({
             model: modelName,
@@ -568,6 +725,9 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
               systemInstruction: systemInstructionText,
               responseMimeType: "application/json",
               temperature: 0.0,
+              maxOutputTokens: 8192,
+              // Batasi tiap model agar kegagalan jaringan tidak menggantung lama.
+              httpOptions: { timeout: 18000 },
               responseSchema: {
                 type: "OBJECT",
                 properties: {
@@ -597,16 +757,41 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
                     type: "STRING",
                     description: "Alasan jika dokumen kurang tajam atau terpotong",
                   },
+                  blur_areas: {
+                    type: "ARRAY",
+                    items: {
+                      type: "OBJECT",
+                      properties: {
+                        area: { type: "STRING" },
+                        severity: { type: "STRING" },
+                        description: { type: "STRING" },
+                        bbox: {
+                          type: "ARRAY",
+                          items: { type: "NUMBER" },
+                        },
+                      },
+                      required: ["area", "severity", "bbox"],
+                    },
+                  },
                 },
-                required: ["jenis_dokumen", "skor_kejelasan", "status_verifikasi"],
+                required: ["jenis_dokumen", "skor_kejelasan", "status_verifikasi", "blur_areas"],
               },
             },
           });
 
-          if (response && response.text) {
-            responseText = response.text;
-            aiSource = "gemini";
-            break;
+          const candidateText = response?.text;
+          if (candidateText) {
+            try {
+              const candidate = parseAiJsonResponse(candidateText);
+              if (isUsableAiParsed(candidate)) {
+                responseText = candidateText;
+                aiSource = "gemini";
+                break;
+              }
+              lastAiError = `Gemini ${modelName}: jawaban tidak lengkap / terindikasi halusinasi`;
+            } catch {
+              lastAiError = `Gemini ${modelName}: JSON tidak valid`;
+            }
           }
         } catch (modelErr: any) {
           lastAiError = `Gemini ${modelName}: ${modelErr?.message || modelErr}`;
@@ -615,20 +800,36 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         }
       }
 
-      // Prioritas 2 (cadangan): nara-route (https://router.bynara.id/v1)
+      // Prioritas 2 (cadangan): nara-route / bynara (https://router.bynara.id/v1)
       // Catatan: endpoint image_url nara-route hanya mendukung gambar — PDF dilewati.
       if (!skipAi && !responseText && naraConfigured && !isPdf) {
         try {
-          responseText = await visionViaNaraRoute({
+          const naraText = await visionViaNaraRoute({
             apiKey: naraApiKey,
-            model: (req.body?.naraModel as string) || process.env.NARA_ROUTE_MODEL || undefined,
+            model:
+              ((req.body?.naraModel || req.body?.bynaraModel) as string) ||
+              process.env.NARA_ROUTE_MODEL ||
+              process.env.BYNARA_MODEL ||
+              undefined,
             systemPrompt: systemInstructionText,
             userPrompt,
             imageBase64: fileBytes.toString("base64"),
             mimeType,
           });
-          if (responseText) aiSource = "nara-route";
-          console.log("[OCR AI] via nara-route (https://router.bynara.id/v1, cadangan)");
+          if (naraText) {
+            try {
+              const candidate = parseAiJsonResponse(naraText);
+              if (isUsableAiParsed(candidate)) {
+                responseText = naraText;
+                aiSource = "nara-route";
+                console.log("[OCR AI] via nara-route (https://router.bynara.id/v1, cadangan)");
+              } else {
+                lastAiError = "nara-route: jawaban tidak lengkap / terindikasi halusinasi";
+              }
+            } catch {
+              lastAiError = "nara-route: JSON tidak valid";
+            }
+          }
         } catch (naraErr: any) {
           lastAiError = `nara-route: ${naraErr?.message || naraErr}`;
           console.warn(`[OCR AI] nara-route (cadangan) gagal: ${lastAiError}`);
@@ -637,11 +838,52 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         console.log("[OCR AI] PDF terdeteksi — lewati nara-route (image-only), hanya Gemini.");
       }
 
-      if (!skipAi && !responseText && !client && !naraConfigured) {
+      // Prioritas 3 (cadangan kedua): OpenRouter / 9router (https://openrouter.ai/api/v1)
+      // Mendukung vision untuk gambar (bukan PDF).
+      const openRouterApiKey = extractOpenRouterApiKey(req);
+      const openRouterConfigured = isOpenRouterConfigured(openRouterApiKey);
+      if (!skipAi && !responseText && openRouterConfigured && !isPdf) {
+        try {
+          const openRouterText = await visionViaOpenRouter({
+            apiKey: openRouterApiKey,
+            model:
+              (req.body?.openrouterModel as string) ||
+              (req.body?.nineRouterModel as string) ||
+              process.env.OPENROUTER_MODEL ||
+              process.env.NINE_ROUTER_MODEL ||
+              undefined,
+            systemPrompt: systemInstructionText,
+            userPrompt,
+            imageBase64: fileBytes.toString("base64"),
+            mimeType,
+          });
+          if (openRouterText) {
+            try {
+              const candidate = parseAiJsonResponse(openRouterText);
+              if (isUsableAiParsed(candidate)) {
+                responseText = openRouterText;
+                aiSource = "openrouter";
+                console.log("[OCR AI] via openrouter (https://openrouter.ai/api/v1, cadangan ke-2)");
+              } else {
+                lastAiError = "openrouter: jawaban tidak lengkap / terindikasi halusinasi";
+              }
+            } catch {
+              lastAiError = "openrouter: JSON tidak valid";
+            }
+          }
+        } catch (orErr: any) {
+          lastAiError = `openrouter: ${orErr?.message || orErr}`;
+          console.warn(`[OCR AI] openrouter (cadangan ke-2) gagal: ${lastAiError}`);
+        }
+      } else if (isPdf && openRouterConfigured) {
+        console.log("[OCR AI] PDF terdeteksi — lewati openrouter (image-only), hanya Gemini.");
+      }
+
+      if (!skipAi && !responseText && !client && !naraConfigured && !openRouterConfigured) {
         return res.status(503).json({
           success: false,
           isSystemError: true,
-          message: "Layanan AI OCR belum dikonfigurasi (GEMINI_API_KEY / NARA_ROUTE_API_KEY kosong). Bukan salah foto Anda — lanjut isi formulir manual atau hubungi petugas untuk verifikasi manual.",
+          message: "Layanan AI OCR belum dikonfigurasi (GEMINI_API_KEY / NARA_ROUTE_API_KEY / BYNARA_API_KEY / OPENROUTER_API_KEY kosong). Bukan salah foto Anda — lanjut isi formulir manual atau hubungi petugas untuk verifikasi manual.",
           data: {
             nik: null,
             nama: null,
@@ -727,18 +969,29 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       }
       parsed.skor_kejelasan = Math.max(0, Math.min(100, Math.round(parsed.skor_kejelasan)));
 
+      // Overlay area buram: selalu array valid agar frontend tak perlu guard berlapis.
+      parsed.blur_areas = sanitizeBlurAreas(parsed.blur_areas);
+
       // Validasi tambahan: Cek kelengkapan digit NIK (parsial disimpan agar user tahu)
       if (parsed.nik) {
-        const nikClean = String(parsed.nik).replace(/\D/g, "");
-        if (nikClean.length !== 16) {
+        // Hanya terima NIK yang benar-benar 16 digit setelah membuang label/pemisah.
+        // Jangan sekadar membuang SEMUA non-digit: teks sampah dari model bisa
+        // menyisakan 16 digit palsu (mis. "3201...Drafting note...").
+        const nikRaw = String(parsed.nik).trim().replace(/^NIK\b[:\s]*/i, "");
+        const nikClean = nikRaw.replace(/[\s.\-:/]/g, "");
+        const nikDigits = nikClean.replace(/\D/g, "");
+        if (!/^\d{16}$/.test(nikClean)) {
           // Simpan bacaan parsial untuk umpan balik (mis. "12/16 digit terbaca"), bukan sekadar null
-          if (nikClean.length >= 8) {
-            parsed.nik_partial = nikClean;
+          if (nikDigits.length >= 8) {
+            parsed.nik_partial = nikDigits;
           }
           parsed.nik = null;
           if (parsed.status_verifikasi === "BERHASIL") {
             parsed.status_verifikasi = "BURAM";
-            parsed.catatan = `NIK terbaca sebagian (${nikClean.length || 0}/16 digit). Foto ulang e-KTP dengan fokus tajam tanpa silau.`;
+            parsed.catatan =
+              nikDigits.length === 16
+                ? "Format NIK tidak valid (ada karakter tambahan). Foto ulang e-KTP dengan fokus tajam tanpa silau."
+                : `NIK terbaca sebagian (${nikDigits.length || 0}/16 digit). Foto ulang e-KTP dengan fokus tajam tanpa silau.`;
           }
         } else {
           parsed.nik = nikClean;
@@ -761,6 +1014,8 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       if (parsed.status_verifikasi === "TIDAK_VALID") {
         parsed.jenis_dokumen = "LAINNYA";
         parsed.nik = null;
+        // Bukan dokumen kependudukan → overlay area tidak relevan.
+        parsed.blur_areas = [];
         if (!parsed.nama || typeof parsed.nama !== "string") parsed.nama = null as any;
         // Cap skor rendah agar jelas invalid
         if (typeof parsed.skor_kejelasan !== "number" || parsed.skor_kejelasan > 25) {
@@ -989,6 +1244,49 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
 
   app.post("/api/scan-document", upload.single("file"), handleOcrRequest);
   app.post("/api/ocr", upload.single("file"), handleOcrRequest);
+
+  // Evaluasi ycwc-001 (bucket privat eval-fotos): wire Vercel handlers ke Express dev.
+  // Tier-1 publik tanpa auth; upload/labels/detail/batch wajib JWT petugas (di handler).
+  app.post("/api/eval/upload", async (req, res) => {
+    try {
+      const { default: h } = await import("./api/eval/upload");
+      return (h as any)(req, res);
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
+    }
+  });
+  app.get("/api/eval/labels", async (req, res) => {
+    try {
+      const { default: h } = await import("./api/eval/labels");
+      return (h as any)(req, res);
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
+    }
+  });
+  app.get("/api/eval/results", async (req, res) => {
+    try {
+      const { default: h } = await import("./api/eval/results");
+      return (h as any)(req, res);
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
+    }
+  });
+  app.get("/api/eval/detail", async (req, res) => {
+    try {
+      const { default: h } = await import("./api/eval/detail");
+      return (h as any)(req, res);
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
+    }
+  });
+  app.delete("/api/eval/batch", async (req, res) => {
+    try {
+      const { default: h } = await import("./api/eval/batch");
+      return (h as any)(req, res);
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
+    }
+  });
 
   // Foto sementara tiket (proksi terdekripsi, no-store; rate-limit 20x/10 mnt/IP).
   app.get("/api/tickets/foto", async (req, res) => {
@@ -1467,7 +1765,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       };
 
       const client = getGeminiClient();
-      const naraApiKey = extractNaraApiKey(req);
+      const naraApiKey = extractNaraApiKey(req) || extractBynaraApiKey(req);
 
       const systemPrompt = `Anda adalah "Asisten Pintar VeriBot", petugas customer service AI resmi Kelurahan Sukamaju (Kecamatan Maju Sejahtera) dalam sistem AIPEX VeriBot (DIGIForward 2026).
 Tugas Anda adalah melayani warga kelurahan secara ramah, sopan, ringkas, dan jelas dalam bahasa Indonesia.
@@ -1492,12 +1790,16 @@ Informasi Resmi Kelurahan Sukamaju:
 
 Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf). Pisahkan tiap paragraf dengan satu baris kosong. Pakai **tebal** untuk istilah penting dan daftar "•" untuk rincian (maksimal 5 butir).`;
 
-      // Prioritas 1: global provider "nara-route" (https://router.bynara.id/v1)
-      if (isNaraRouteConfigured(naraApiKey)) {
+      // Prioritas 1: global provider "nara-route" / "bynara" (https://router.bynara.id/v1)
+      if (isNaraRouteConfigured(naraApiKey) || isBynaraConfigured(naraApiKey)) {
         try {
           const reply = await chatCompletionViaNaraRoute({
             apiKey: naraApiKey,
-            model: (req.body?.naraModel as string) || process.env.NARA_ROUTE_MODEL || undefined,
+            model:
+              ((req.body?.naraModel || req.body?.bynaraModel) as string) ||
+              process.env.NARA_ROUTE_MODEL ||
+              process.env.BYNARA_MODEL ||
+              undefined,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: message },
@@ -1514,7 +1816,7 @@ Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-
 
       if (client) {
         // Multi-model resilience: Prioritize gemini-3.6-flash as requested, with fallback model
-        const candidateModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
+        const candidateModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
 
         for (const modelName of candidateModels) {
           try {

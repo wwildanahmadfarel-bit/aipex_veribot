@@ -66,6 +66,11 @@ Foto dokumen **tidak pernah disimpan permanen**: diproses di memori, disalin ter
 - **Cara kerja:** kunci per-tiket `HMAC(master, kode_tiket)`, enkripsi AES-256-GCM + IV acak, upload ke bucket privat `tiket-fotos`; cron harian menghapus foto tiket terbengkalai.
 - **Lokasi:** `api/_lib/tiket-foto.ts`, `api/cron/purge-tiket-foto.ts`, `api/tickets/foto.ts`
 
+### F7 — Evaluasi Foto Asli + Transparansi Hibrida (batch ycwc-001)
+- **Manfaat:** klaim akurasi berdasar 100 foto asli warga (bukan dummy) dengan privasi terjaga — bukti Research & Evidence untuk juri.
+- **Cara kerja:** upload via `POST /api/eval/upload` (JWT petugas) → enkripsi AES-256-GCM (`EVAL_MASTER_KEY` terpisah) → bucket privat `eval-fotos` (tanpa policy, hanya service_role); evaluasi via `scripts/evaluate-eval-bucket.py` memakai pipeline OCR yang sama dengan warga (NIK di-mask); publik hanya agregat di `GET /api/eval/results` → halaman `/transparansi` Tier-1; detail per-file tanpa foto di `GET /api/eval/detail` (JWT); purge hari ke-14 via `DELETE /api/eval/batch` + cron `purge-eval-fotos`.
+- **Lokasi:** `supabase/migrations/20261015_eval_fotos.sql`, `api/_lib/eval-foto.ts`, `api/eval/*.ts`, `api/cron/purge-eval-fotos.ts`, `scripts/evaluate-eval-bucket.py`, `src/components/TransparencyPage.tsx`, `docs/UJI-PENGGUNA.md`, `docs/METRIK-TRANSPARANSI.md`
+
 ---
 
 ## 3. The Code — Kode Paling Inti + Lokasi Screenshot
@@ -188,8 +193,8 @@ if (res.status === 404 || res.status >= 500)                         // cadangan
 4. Lacak via kolom **Lacak Status Resi** → masukkan kode tiket.
 
 ### Jalur B — Petugas: Putus Tiket (2 menit)
-1. **Login Petugas** (kode akses resmi) → Dashboard → pilih tiket `PENDING`.
-2. Lihat foto bukti (terdekripsi sementara) → klik **Setujui / Tolak / Perlu Perbaikan** + catatan.
+1.Lihat  **Login Petugas** (kode akses resmi) → Dashboard → pilih tiket `PENDING`.
+2. foto bukti (terdekripsi sementara) → klik **Setujui / Tolak / Perlu Perbaikan** + catatan.
 3. Status berubah, foto ter-purge otomatis, warga menerima notifikasi WA (bila WA aktif).
 
 ### Jalur C — Chatbot (1 menit)
@@ -212,6 +217,7 @@ if (res.status === 404 || res.status >= 500)                         // cadangan
 - **Operasional murah:** 1 repo → deploy Vercel Hobby untuk demo, naik ke Pro tanpa ubah kode untuk produksi.
 - **Skalabel:** tambah kelurahan = tambah baris konfigurasi + tabel Supabase, bukan aplikasi baru.
 - **Patuh regulasi:** UU PDP by-design (enkripsi, minimisasi, purge) — mengurangi risiko hukum adopsi.
+- **Terbukti terukur:** evaluasi 100 foto asli batch `ycwc-001` (F1/LAINNYA/BURAM + latency) di halaman `/transparansi` Tier-1 publik + Tier-2 audit petugas — lihat F7.
 - **Roadmap:** verifikasi NIK ke Dukcapil, antrean real-time, analitik beban loket, multi-bahasa daerah.
 
 *Disusun dari kode sumber AIPEX VeriBot — seluruh klaim di atas dapat diverifikasi pada file dan baris yang dirujuk.*

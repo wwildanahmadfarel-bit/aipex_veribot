@@ -4,7 +4,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
 import {
+  getBynaraApiKey,
   getNaraRouteApiKey,
+  isBynaraConfigured,
   isNaraRouteConfigured,
 } from "../../services/ai_providers.js";
 
@@ -116,17 +118,50 @@ export function getGeminiClient(): GoogleGenAI | null {
 }
 
 export function extractNaraApiKey(req: any): string {
-  const fromHeader = req?.headers?.["x-nara-route-api-key"] || req?.headers?.["x-nara-api-key"];
-  const fromBody = req?.body?.naraApiKey || req?.body?.nara_route_api_key;
+  const fromHeader =
+    req?.headers?.["x-nara-route-api-key"] ||
+    req?.headers?.["x-nara-api-key"] ||
+    req?.headers?.["x-bynara-api-key"] ||
+    req?.headers?.["x-bynara-route-api-key"];
+  const fromBody =
+    req?.body?.naraApiKey ||
+    req?.body?.nara_route_api_key ||
+    req?.body?.bynaraApiKey ||
+    req?.body?.bynara_api_key ||
+    req?.body?.apiKey ||
+    req?.body?.key;
   const picked =
     (typeof fromHeader === "string" && fromHeader.trim()) ||
     (typeof fromBody === "string" && fromBody.trim()) ||
     "";
-  return getNaraRouteApiKey(picked);
+  return getNaraRouteApiKey(picked) || getBynaraApiKey(picked) || picked;
 }
 
+export function extractBynaraApiKey(req: any): string {
+  const fromHeader =
+    req?.headers?.["x-bynara-api-key"] ||
+    req?.headers?.["x-bynara-route-api-key"] ||
+    req?.headers?.["x-nara-route-api-key"] ||
+    req?.headers?.["x-nara-api-key"];
+  const fromBody =
+    req?.body?.bynaraApiKey ||
+    req?.body?.bynara_api_key ||
+    req?.body?.bynaraRouteApiKey ||
+    req?.body?.naraApiKey ||
+    req?.body?.nara_route_api_key ||
+    req?.body?.apiKey ||
+    req?.body?.key;
+  const picked =
+    (typeof fromHeader === "string" && fromHeader.trim()) ||
+    (typeof fromBody === "string" && fromBody.trim()) ||
+    "";
+  return getBynaraApiKey(picked);
+}
+
+export const extractBynaraRouteApiKey = extractBynaraApiKey;
+
 export function isNaraConfigured(explicitKey?: unknown): boolean {
-  return isNaraRouteConfigured(explicitKey);
+  return isNaraRouteConfigured(explicitKey) || isBynaraConfigured(explicitKey);
 }
 
 export function maskNik(rawNik: string): string {

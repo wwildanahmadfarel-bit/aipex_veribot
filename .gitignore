@@ -4,5 +4,13 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.pyc
+__pycache__/
 .env*
 !.env.example
+# Dataset evaluasi foto asli — PRIVAT, tidak boleh commit (UU PDP)
+eval/private/
+eval/*.enc
+private/
+*.enc
+eval/results-private.json
