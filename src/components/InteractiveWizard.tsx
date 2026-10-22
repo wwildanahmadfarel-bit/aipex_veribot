@@ -412,6 +412,14 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     const mainSlotTitle = requiredDocs[0]?.title;
     const main = pages.find((p) => p.slotTitle === mainSlotTitle) || pages[0];
     const rest = pages.filter((p) => p !== main);
+    // Server membatasi payload 4,2 MB. Base64 ~= 4/3 ukuran biner.
+    const mainBytes = Math.ceil((main.base64.length * 3) / 4);
+    if (mainBytes > 4 * 1024 * 1024) {
+      alert(
+        "Halaman dokumen utama lebih dari 4 MB setelah dipecah. Kompres PDF atau unggah halaman itu sebagai foto JPG/PNG agar bisa dipindai."
+      );
+      return;
+    }
     setCombinedPages(
       pages.map((p) => ({
         base64: p.base64,
