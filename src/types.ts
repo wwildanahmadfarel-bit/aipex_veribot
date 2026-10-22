@@ -31,13 +31,6 @@ export interface ServiceCatalogItem {
   }[];
 }
 
-export interface ChatMessage {
-  id: string;
-  sender: "bot" | "user";
-  text: string;
-  timestamp: string;
-}
-
 export interface VerificationResult {
   nik: string;
   nama: string;

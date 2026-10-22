@@ -19,8 +19,8 @@
  * Cara pakai:
  *  1. Isi OPENROUTER_API_KEY / 9ROUTER_API_KEY di .env.local (atau kirim header
  *     `x-openrouter-api-key` / `x-9router-api-key` per-request untuk input manual dari UI).
- *  2. Panggil `chatCompletionViaOpenRouter(...)` / `visionViaOpenRouter(...)`
- *     atau `getOpenRouterApiKey()` dari server.ts / route lain.
+ *  2. Panggil `chatCompletionViaNaraRoute(...)` / `visionViaNaraRoute(...)`
+ *     atau `visionViaOpenRouter(...)` dari server.ts / route lain.
  */
 
 export const NARA_ROUTE_BASE_URL = "https://router.bynara.id/v1";
@@ -111,15 +111,11 @@ export function getBynaraBaseURL(): string {
   return raw.replace(/\/+$/, "");
 }
 
-export const getBynaraRouteBaseURL = getBynaraBaseURL;
-
 export function getOpenRouterBaseURL(): string {
   const fromEnv = (process.env.OPENROUTER_BASE_URL || process.env.NINE_ROUTER_BASE_URL || "").trim();
   const raw = fromEnv || OPENROUTER_BASE_URL;
   return raw.replace(/\/+$/, "");
 }
-
-export const getNineRouterBaseURL = getOpenRouterBaseURL;
 
 /**
  * Ambil API key Nara Route.
@@ -140,8 +136,6 @@ export function getOpenRouterApiKey(explicitKey?: unknown): string {
   );
 }
 
-export const getNineRouterApiKey = getOpenRouterApiKey;
-
 /** Ambil API key Bynara (berbagai alias env). */
 export function getBynaraApiKey(explicitKey?: unknown): string {
   if (typeof explicitKey === "string" && explicitKey.trim()) return explicitKey.trim();
@@ -151,9 +145,6 @@ export function getBynaraApiKey(explicitKey?: unknown): string {
     (process.env.NARA_ROUTE_API_KEY || "").trim()
   );
 }
-
-/** Alias untuk kompatibilitas */
-export const getBynaraRouteApiKey = getBynaraApiKey;
 
 export function isNaraRouteConfigured(explicitKey?: unknown): boolean {
   return getNaraRouteApiKey(explicitKey).length > 0 && !isNaraAuthBlocked();
@@ -167,17 +158,9 @@ export function isOpenRouterConfigured(explicitKey?: unknown): boolean {
   return getOpenRouterApiKey(explicitKey).length > 0;
 }
 
-export const isNineRouterConfigured = isOpenRouterConfigured;
-
-export const isBynaraRouteConfigured = isBynaraConfigured;
-
 /** Ambil API key Gemini (env: GEMINI_API_KEY). */
 export function getGeminiApiKey(): string {
   return (process.env.GEMINI_API_KEY || "").trim();
-}
-
-export function isGeminiConfigured(): boolean {
-  return getGeminiApiKey().length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,61 +336,6 @@ export async function chatCompletionViaNaraRoute(opts: NaraChatOptions): Promise
   throw lastError || new Error("nara-route: semua model gagal dihubungi.");
 }
 
-export async function chatCompletionViaBynara(opts: NaraChatOptions): Promise<string> {
-  const apiKey = getBynaraApiKey(opts.apiKey);
-  if (!apiKey) {
-    throw new Error("BYNARA_API_KEY belum diisi. Isi di .env.local atau kirim header x-bynara-api-key.");
-  }
-  const baseURL = getBynaraBaseURL();
-  const modelsToTry = [opts.model || AI_PROVIDERS["bynara"]?.defaultModel || AI_PROVIDERS["nara-route"].defaultModel].filter(Boolean);
-
-  let lastError: any = null;
-  for (const model of modelsToTry) {
-    const { signal, cancel } = withTimeout(opts.timeoutMs ?? 60_000);
-    try {
-      const res = await fetch(`${baseURL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: opts.messages,
-          temperature: opts.temperature ?? 0.2,
-          ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
-          ...(opts.responseFormatJson ? { response_format: { type: "json_object" } } : {}),
-        }),
-        signal,
-      });
-      cancel();
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        lastError = new Error(`bynara [${model}] ${res.status}: ${text.slice(0, 500)}`);
-        if (res.status === 401 || res.status === 403) {
-          markNaraAuthBlocked();
-          throw lastError;
-        }
-        continue;
-      }
-
-      const json: any = await res.json();
-      const content: string | undefined =
-        json?.choices?.[0]?.message?.content ?? json?.choices?.[0]?.text;
-      if (content && String(content).trim()) return String(content).trim();
-      lastError = new Error(`bynara [${model}]: respons kosong dari router.`);
-    } catch (err: any) {
-      cancel();
-      lastError = err;
-      if (err?.message?.includes("401") || err?.message?.includes("403")) throw err;
-    }
-  }
-  throw lastError || new Error("bynara: semua model gagal dihubungi.");
-}
-
-export const chatCompletionViaBynaraRoute = chatCompletionViaBynara;
-
 // ---------------------------------------------------------------------------
 // Vision / OCR via nara-route (OpenAI-compatible image_url)
 // Dipakai sebagai opsi tambahan selain Gemini Vision di server.ts.
@@ -479,136 +407,6 @@ export async function visionViaNaraRoute(opts: NaraVisionOptions): Promise<strin
   }
 }
 
-export async function visionViaBynara(opts: NaraVisionOptions): Promise<string> {
-  const apiKey = getBynaraApiKey(opts.apiKey);
-  if (!apiKey) {
-    throw new Error("BYNARA_API_KEY belum diisi.");
-  }
-  const baseURL = getBynaraBaseURL();
-  const model = opts.model || AI_PROVIDERS["bynara"]?.defaultModel || AI_PROVIDERS["nara-route"].defaultModel;
-  const mimeType = opts.mimeType || "image/jpeg";
-  const dataUrl = opts.imageBase64.startsWith("data:")
-    ? opts.imageBase64
-    : `data:${mimeType};base64,${opts.imageBase64}`;
-
-  const { signal, cancel } = withTimeout(opts.timeoutMs ?? 90_000);
-  try {
-    const res = await fetch(`${baseURL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: opts.systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: opts.userPrompt },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        temperature: 0,
-        response_format: { type: "json_object" },
-      }),
-      signal,
-    });
-    cancel();
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      if (res.status === 401 || res.status === 403) markNaraAuthBlocked();
-      throw new Error(`bynara vision ${res.status}: ${text.slice(0, 500)}`);
-    }
-    const json: any = await res.json();
-    const content: string | undefined = json?.choices?.[0]?.message?.content;
-    if (!content || !String(content).trim()) {
-      throw new Error("bynara vision: respons kosong dari router.");
-    }
-    return String(content).trim();
-  } catch (err) {
-    cancel();
-    throw err;
-  }
-}
-
-export const visionViaBynaraRoute = visionViaBynara;
-
-// ---------------------------------------------------------------------------
-// OpenRouter (9router) Chat Completions — OpenAI-compatible
-// Endpoint: POST {baseURL}/chat/completions
-// Header : Authorization: Bearer <apiKey>
-// Extra headers: HTTP-Referer, X-Title (recommended by OpenRouter)
-// ---------------------------------------------------------------------------
-
-export interface OpenRouterChatOptions {
-  apiKey?: string;
-  model?: string;
-  messages: ChatMessage[];
-  temperature?: number;
-  maxTokens?: number;
-  responseFormatJson?: boolean;
-  timeoutMs?: number;
-}
-
-export async function chatCompletionViaOpenRouter(opts: OpenRouterChatOptions): Promise<string> {
-  const apiKey = getOpenRouterApiKey(opts.apiKey);
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY / 9ROUTER_API_KEY belum diisi. Isi di .env.local atau kirim header x-openrouter-api-key / x-9router-api-key.");
-  }
-  const baseURL = getOpenRouterBaseURL();
-  const modelsToTry = [opts.model || AI_PROVIDERS["openrouter"].defaultModel].filter(Boolean);
-
-  let lastError: any = null;
-  for (const model of modelsToTry) {
-    const { signal, cancel } = withTimeout(opts.timeoutMs ?? 60_000);
-    try {
-      const res = await fetch(`${baseURL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          // OpenRouter recommended headers
-          "HTTP-Referer": "https://aipex.veribot.id",
-          "X-Title": "AIPEX VeriBot",
-        },
-        body: JSON.stringify({
-          model,
-          messages: opts.messages,
-          temperature: opts.temperature ?? 0.2,
-          ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
-          ...(opts.responseFormatJson ? { response_format: { type: "json_object" } } : {}),
-        }),
-        signal,
-      });
-      cancel();
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        lastError = new Error(`openrouter [${model}] ${res.status}: ${text.slice(0, 500)}`);
-        if (res.status === 401 || res.status === 403) throw lastError;
-        continue;
-      }
-
-      const json: any = await res.json();
-      const content: string | undefined =
-        json?.choices?.[0]?.message?.content ?? json?.choices?.[0]?.text;
-      if (content && String(content).trim()) return String(content).trim();
-      lastError = new Error(`openrouter [${model}]: respons kosong dari router.`);
-    } catch (err: any) {
-      cancel();
-      lastError = err;
-      if (err?.message?.includes("401") || err?.message?.includes("403")) throw err;
-    }
-  }
-  throw lastError || new Error("openrouter: semua model gagal dihubungi.");
-}
-
-export const chatCompletionViaNineRouter = chatCompletionViaOpenRouter;
-
 // ---------------------------------------------------------------------------
 // OpenRouter (9router) Vision — OpenAI-compatible image_url
 // ---------------------------------------------------------------------------
@@ -679,5 +477,3 @@ export async function visionViaOpenRouter(opts: OpenRouterVisionOptions): Promis
     throw err;
   }
 }
-
-export const visionViaNineRouter = visionViaOpenRouter;

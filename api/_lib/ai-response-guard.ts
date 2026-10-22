@@ -65,12 +65,3 @@ export function isUsableAiParsed(parsed: any): boolean {
 
   return true;
 }
-
-/** True bila teks respons AI bisa di-parse dan lolos guard. */
-export function isUsableAiText(text: string, parse: (raw: string) => any): boolean {
-  try {
-    return isUsableAiParsed(parse(text));
-  } catch {
-    return false;
-  }
-}

@@ -5,7 +5,7 @@
 // - path: eval/{batch_id}/{file_id}.jpg.enc
 // Foto TIDAK PERNAH ke git/public/log — hanya .enc di bucket privat.
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createHmac, randomBytes } from "node:crypto";
 import { getSupabase } from "./store.js";
 
 export const EVAL_BUCKET = "eval-fotos";
@@ -84,39 +84,3 @@ export async function simpanFotoEval(
   }
 }
 
-export interface LihatEvalResult {
-  ok: boolean;
-  bytes: Buffer | null;
-  mime: string;
-  reason?: string;
-}
-
-/** Unduh + dekripsi 1 foto evaluasi (officer only via API). Gagal -> {ok:false}. */
-export async function lihatFotoEval(
-  batchId: string,
-  storagePath: string,
-  ivHex: string
-): Promise<LihatEvalResult> {
-  try {
-    const m = /eval\/([^/]+)\/([^/.]+)\./.exec(String(storagePath || ""));
-    const fileId = m?.[2] || "";
-    const batch = m?.[1] || batchId;
-    const key = evalFileKey(batch, fileId);
-    const supabase = getSupabase();
-    if (!key || !supabase) return { ok: false, bytes: null, mime: "image/jpeg", reason: "Layanan eval belum siap." };
-    if (!ivHex || !/^[0-9a-fA-F]{24}$/.test(ivHex)) return { ok: false, bytes: null, mime: "image/jpeg", reason: "IV tidak valid." };
-    const { data: blob, error: dlErr } = await supabase.storage.from(EVAL_BUCKET).download(storagePath);
-    if (dlErr || !blob) return { ok: false, bytes: null, mime: "image/jpeg", reason: "File evaluasi tidak tersedia." };
-    const payload = Buffer.from(await blob.arrayBuffer());
-    if (payload.length < 17) return { ok: false, bytes: null, mime: "image/jpeg", reason: "File rusak." };
-    const enc = payload.subarray(0, payload.length - 16);
-    const tag = payload.subarray(payload.length - 16);
-    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivHex, "hex"));
-    decipher.setAuthTag(tag);
-    const plain = Buffer.concat([decipher.update(enc), decipher.final()]);
-    const mime = /\.png\.enc$/i.test(storagePath) ? "image/png" : /\.webp\.enc$/i.test(storagePath) ? "image/webp" : /\.pdf\.enc$/i.test(storagePath) ? "application/pdf" : "image/jpeg";
-    return { ok: true, bytes: plain, mime };
-  } catch {
-    return { ok: false, bytes: null, mime: "image/jpeg", reason: "File tidak tersedia." };
-  }
-}

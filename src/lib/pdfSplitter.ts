@@ -62,15 +62,6 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
 export function revokePreviewUrls(pages: PdfPageData[]): void {
   pages.forEach((p) => {
     if (p.previewUrl.startsWith("blob:")) {
@@ -88,8 +79,4 @@ export function validatePdfFile(file: File): { valid: boolean; error?: string } 
     return { valid: false, error: "Ukuran file maksimal 10 MB" };
   }
   return { valid: true };
-}
-
-export function getRequiredPageCount(requiredDocs: { title: string; mandatory: boolean }[]): number {
-  return requiredDocs.filter((d) => d.mandatory).length;
 }

@@ -130,9 +130,3 @@ export async function clearDraft(): Promise<void> {
     db.close();
   } catch {}
 }
-
-/** Cek apakah ada draft valid (untuk banner resume). */
-export async function hasValidDraft(): Promise<boolean> {
-  const draft = await loadDraft();
-  return draft !== null;
-}

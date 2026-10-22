@@ -127,22 +127,5 @@ export function validateUploadBuffer(buf: Buffer | null, mimeHint?: string): Fil
   return { ok: true, detected };
 }
 
-export interface PurgeResult {
-  purged: boolean;
-  artifacts: number;
-}
-
-/**
- * Purge artefak foto saat keputusan petugas (DISETUJUI/DITOLAK/PERLU_PERBAIKAN).
- * Implementasi nyata: hapusFotoTiket() di api/_lib/tiket-foto.ts (dipanggil
- * di semua PATCH keputusan + cron sweeper). Fungsi ini dipertahankan sebagai
- * penanda kebijakan + fallback bila tiket-foto belum terkonfigurasi.
- * Kolom teks (jenis_dokumen/NIK/nama) SENGAJA tidak disentuh — rekap butuh itu.
- */
-export function purgeDecisionArtifacts(_ticketId?: unknown): PurgeResult {
-  void _ticketId;
-  return { purged: true, artifacts: 0 };
-}
-
 /** Penanda audit untuk verification_logs: bukti foto tidak dipertahankan pasca-keputusan. */
 export const PHOTO_PURGE_AUDIT_NOTE = "[Foto dokumen: tidak disimpan/di-purge otomatis]";

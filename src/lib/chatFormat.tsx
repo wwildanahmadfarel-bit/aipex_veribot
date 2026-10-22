@@ -7,8 +7,6 @@ import React from "react";
 // - URL otomatis jadi link _blank.
 // Aman XSS: semua teks dirender sebagai node React (tidak ada dangerouslySetInnerHTML).
 
-const URL_RE = /(https?:\/\/[^\s)]+)/g;
-
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   // Token: **tebal**, *miring*, `kode`, URL — sisanya teks polos.
   const tokenRe = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`\n]+`|https?:\/\/[^\s)]+)/g;
@@ -153,8 +151,4 @@ export function renderChatReply(text: string): React.ReactNode {
   flushList();
 
   return <div className="space-y-2">{nodes}</div>;
-}
-
-export function hasChatMarkdown(text: string): boolean {
-  return URL_RE.test(String(text || "")) || /\*\*[^*]+\*\*/.test(String(text || ""));
 }
