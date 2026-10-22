@@ -1245,48 +1245,18 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
   app.post("/api/scan-document", upload.single("file"), handleOcrRequest);
   app.post("/api/ocr", upload.single("file"), handleOcrRequest);
 
-  // Evaluasi ycwc-001 (bucket privat eval-fotos): wire Vercel handlers ke Express dev.
-  // Tier-1 publik tanpa auth; upload/labels/detail/batch wajib JWT petugas (di handler).
-  app.post("/api/eval/upload", async (req, res) => {
+  // Evaluasi ycwc-001 (bucket privat eval-fotos): wire Vercel handler ke Express dev.
+  // Satu handler terpadu (?action=...), baik untuk /api/eval/results maupun /api/eval?action=results.
+  const evalDevHandler = async (req: any, res: any) => {
     try {
-      const { default: h } = await import("./api/eval/upload");
+      const { default: h } = await import("./api/eval");
       return (h as any)(req, res);
     } catch (e: any) {
       return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
     }
-  });
-  app.get("/api/eval/labels", async (req, res) => {
-    try {
-      const { default: h } = await import("./api/eval/labels");
-      return (h as any)(req, res);
-    } catch (e: any) {
-      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
-    }
-  });
-  app.get("/api/eval/results", async (req, res) => {
-    try {
-      const { default: h } = await import("./api/eval/results");
-      return (h as any)(req, res);
-    } catch (e: any) {
-      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
-    }
-  });
-  app.get("/api/eval/detail", async (req, res) => {
-    try {
-      const { default: h } = await import("./api/eval/detail");
-      return (h as any)(req, res);
-    } catch (e: any) {
-      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
-    }
-  });
-  app.delete("/api/eval/batch", async (req, res) => {
-    try {
-      const { default: h } = await import("./api/eval/batch");
-      return (h as any)(req, res);
-    } catch (e: any) {
-      return res.status(500).json({ success: false, message: String(e?.message || e).slice(0, 200) });
-    }
-  });
+  };
+  app.all("/api/eval", evalDevHandler);
+  app.all("/api/eval/:action", evalDevHandler);
 
   // Foto sementara tiket (proksi terdekripsi, no-store; rate-limit 20x/10 mnt/IP).
   app.get("/api/tickets/foto", async (req, res) => {

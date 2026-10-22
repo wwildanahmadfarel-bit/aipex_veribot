@@ -48,7 +48,7 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
     let alive = true;
     (async () => {
       try {
-        const res = await fetch("/api/eval/results?batch_id=ycwc-001");
+        const res = await fetch("/api/eval?action=results&batch_id=ycwc-001");
         const j = await res.json().catch(() => null);
         if (!alive) return;
         if (j?.data) setAgg(j.data as EvalAggregate);
@@ -71,7 +71,7 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
     }
     setDetailState("loading");
     try {
-      const res = await fetch("/api/eval/detail?batch_id=ycwc-001", {
+      const res = await fetch("/api/eval?action=detail&batch_id=ycwc-001", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {

@@ -5,16 +5,17 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api_tickets.php", "destination": "/api/admin/tickets" },
+    { "source": "/api/eval/:action", "destination": "/api/eval?action=:action" },
+    { "source": "/api/officer/login", "destination": "/api/admin/login" },
+    { "source": "/api/ocr", "destination": "/api/scan-document" },
     { "source": "/api/:path*", "destination": "/api/:path*" }
   ],
   "functions": {
     "api/scan-document.ts": { "maxDuration": 60, "memory": 1024 },
-    "api/ocr.ts": { "maxDuration": 60, "memory": 1024 },
     "api/chat-faq.ts": { "maxDuration": 30 },
     "api/admin/tickets.ts": { "maxDuration": 30 },
-    "api/eval/upload.ts": { "maxDuration": 30 },
-    "api/eval/detail.ts": { "maxDuration": 30 },
-    "api/eval/batch.ts": { "maxDuration": 60 }
+    "api/eval.ts": { "maxDuration": 30 },
+    "api/tickets/foto.ts": { "maxDuration": 30 }
   },
   "crons": [
     { "path": "/api/cron/purge-tiket-foto", "schedule": "0 2 * * *" },
