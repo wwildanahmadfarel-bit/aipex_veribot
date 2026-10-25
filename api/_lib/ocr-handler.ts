@@ -9,6 +9,8 @@ import {
   getGeminiClient,
   getSupabase,
   isNaraConfigured,
+  JENIS_DOKUMEN_VALID,
+  JENIS_NIK_OPSIONAL,
   maskNik,
   memTickets,
   normalizeJenisDokumen,
@@ -34,18 +36,22 @@ import { getCachedOcr, setCachedOcr } from "./ocr-cache.js";
 import { isUsableAiParsed } from "./ai-response-guard.js";
 import { logOcrAttempt } from "./abuse-log.js";
 
-const OCR_SYSTEM = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga / KK, dan Akta Kelahiran).
+const OCR_SYSTEM = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga/KK, KIA, akta kelahiran/kematian/perkawinan, dan Surat Pindah/SKPWNI).
 
 Tugas utama Anda:
 1. Identifikasi Jenis Dokumen (wajib tepat):
    - "KTP": e-KTP Republik Indonesia. Ciri wajib: ada tulisan "NIK" 16 digit, header provinsi/kabupaten, foto wajah, tulisan "KARTU TANDA PENDUDUK" / "e-KTP". Varian tulisan "e-KTP", "KTP-EL", "KTP EL" semuanya tetap "KTP".
    - "KK": Kartu Keluarga.
-   - "AKTA": Akta Kelahiran.
-   - "LAINNYA": WAJIB dipakai jika gambar BUKAN salah satu dari ketiga dokumen di atas (misal: SIM, paspor, foto selfie, screenshot HP, dokumen asing, kertas kosong, foto blur total tanpa ciri Dukcapil).
+   - "AKTA": Akta Kelahiran (kutipan akta kelahiran).
+   - "AKTA_KEMATIAN": Akta Kematian / kutipan akta kematian Dukcapil, atau surat keterangan kematian resmi (RS/dokter/kelurahan).
+   - "AKTA_PERKAWINAN": Akta Perkawinan / kutipan akta perkawinan (termasuk perkawinan non-Muslim yang dilegalisasi).
+   - "SURAT_PINDAH": Surat Keterangan Pindah WNI (SKPWNI) atau formulir permohonan pindah penduduk.
+   - "KIA": Kartu Identitas Anak.
+   - "LAINNYA": WAJIB dipakai HANYA jika gambar bukan salah satu dari ketujuh dokumen di atas (misal: SIM, paspor, foto selfie, screenshot HP, dokumen asing, kertas kosong, foto blur total tanpa ciri Dukcapil).
 
 2. Ekstraksi Data Utama:
-   - NIK: Cari 16-digit Nomor Induk Kependudukan. Bersihkan dari spasi atau simbol. Jika tidak ditemukan, kabur, atau tidak bernilai 16 digit, set ke null.
-   - Nama: Ambil nama lengkap pemilik dokumen sesuai teks resmi. Jika bukan dokumen Dukcapil, set ke null.
+   - NIK: Cari 16-digit Nomor Induk Kependudukan (pada akta kematian: NIK almarhum; pada akta perkawinan: NIK yang paling jelas). Bersihkan dari spasi atau simbol. Jika tidak ditemukan, kabur, atau tidak bernilai 16 digit, set ke null — dokumen non-kartu tetap valid walau NIK null.
+   - Nama: Ambil nama lengkap utama sesuai teks resmi (pemilik dokumen / almarhum / pasangan / anak). Jika bukan dokumen Dukcapil, set ke null.
 
 3. Evaluasi Kualitas Fisik & Kejelasan Foto:
    - Periksa kejelasan teks (apakah terjadi motion blur atau out-of-focus).
@@ -59,13 +65,13 @@ Tugas utama Anda:
    - 0 - 25: Bukan dokumen kependudukan (wajib skor rendah).
 
 5. Penentuan Status Verifikasi (wajib konsisten dengan jenis):
-   - "BERHASIL": Dokumen valid (KTP/KK/AKTA) dan skor kejelasan >= 70.
-   - "BURAM": Dokumen kependudukan asli (KTP/KK/AKTA), namun skor kejelasan < 70 (memerlukan foto ulang).
+   - "BERHASIL": Dokumen kependudukan yang didukung (KTP/KK/AKTA/AKTA_KEMATIAN/AKTA_PERKAWINAN/SURAT_PINDAH/KIA) dan skor kejelasan >= 70.
+   - "BURAM": Dokumen kependudukan yang didukung, namun skor kejelasan < 70 (memerlukan foto ulang).
    - "TIDAK_VALID": WAJIB dipakai jika jenis_dokumen "LAINNYA" (gambar bukan dokumen kependudukan resmi Indonesia).
 
-6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen KTP/KK/AKTA):
+6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen kependudukan yang didukung, bukan LAINNYA):
    - Identifikasi bagian dokumen yang buram, silau, gelap, terpotong, atau tidak terbaca.
-   - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", atau "lainnya".
+   - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", "nomor_akta", "tanggal_peristiwa", "pasangan", atau "lainnya".
    - "severity": "high" (teks kunci tidak terbaca), "medium" (terbaca sebagian), "low" (terbaca namun kurang tajam).
    - "bbox": [x, y, width, height] dalam PERSEN 0-100 relatif terhadap gambar, (x, y) = pojok kiri atas area. Perkiraan posisi yang wajar sudah cukup.
    - "description": penyebab singkat, contoh "motion blur", "silau flash", "kurang cahaya", "bayangan", "terpotong", "out of focus".
@@ -74,7 +80,7 @@ Tugas utama Anda:
 
 7. Catatan Perbaikan (Saran Singkat):
    - Jika status BURAM, berikan 1 kalimat saran konkret (contoh: "Foto KTP terlalu silau di area NIK, harap matikan lampu flash dan ambil ulang foto di tempat terang").
-   - Jika status TIDAK_VALID, WAJIB awali catatan dengan kalimat persis: "File bukan Kartu Kependudukan Indonesia." lalu lanjutkan saran unggah e-KTP asli.
+   - Jika status TIDAK_VALID, WAJIB awali catatan dengan kalimat persis: "File bukan Kartu Kependudukan Indonesia." lalu lanjutkan saran mengunggah foto dokumen kependudukan yang didukung (e-KTP, KK, KIA, akta kelahiran/kematian/perkawinan, atau Surat Pindah/SKPWNI).
 
 PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan, blur_areas.`;
 
@@ -183,8 +189,6 @@ export async function handleOcr(req: any, res: any) {
     if (fileBytes && fileBytes.length === 0) fileBytes = null;
 
     const ocrStart = Date.now();
-    // Salinan foto untuk arsip sementara terenkripsi (diisi setelah AI selesai).
-    let fotoCopy: Buffer | null = null;
     const clientIp = getClientIp(req);    const ipHash = hashIp(clientIp, req?.headers?.["user-agent"]);
     const limits = ocrLimits();
 
@@ -315,7 +319,7 @@ export async function handleOcr(req: any, res: any) {
     const naraConfigured = isNaraConfigured(naraApiKey);
     const client: GoogleGenAI | null = getGeminiClient();
 
-    const ocrModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
+    const ocrModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"];
     let responseText = "";
     let lastAiError = "";
     const isPdf = /pdf/i.test(mimeType || "");
@@ -482,12 +486,8 @@ export async function handleOcr(req: any, res: any) {
         },
       });
     }
-    // Foto sudah selesai dipakai AI: salin untuk arsip sementara terenkripsi,
-    // lalu nol-kan buffer asli (panjang tak berubah, aman untuk log size).
-    fotoCopy = null;
-    try {
-      if (fileBytes) fotoCopy = Buffer.from(fileBytes);
-    } catch {}
+    // Foto sudah selesai dipakai AI: nol-kan buffer asli
+    // (panjang tak berubah, aman untuk log size).
     try {
       if (fileBytes) fileBytes.fill(0);
     } catch {}
@@ -516,7 +516,13 @@ export async function handleOcr(req: any, res: any) {
       if (!/^\d{16}$/.test(nikClean)) {
         if (nikDigits.length >= 8) parsed.nik_partial = nikDigits;
         parsed.nik = null;
-        if (parsed.status_verifikasi === "BERHASIL") {
+        // Untuk dokumen non-kartu (akta kematian/perkawinan & surat pindah),
+        // NIK memang sering tidak tercantum → cukup kosongkan, jangan
+        // menurunkan vonis BERHASIL menjadi BURAM.
+        if (
+          parsed.status_verifikasi === "BERHASIL" &&
+          !(JENIS_NIK_OPSIONAL as readonly string[]).includes(String(parsed.jenis_dokumen))
+        ) {
           parsed.status_verifikasi = "BURAM";
           parsed.catatan =
             nikDigits.length === 16
@@ -555,7 +561,7 @@ export async function handleOcr(req: any, res: any) {
     const isBuramValid =
       parsed.status_verifikasi === "BURAM" &&
       !isTidakValid &&
-      ["KTP", "KK", "AKTA"].includes(parsed.jenis_dokumen);
+      (JENIS_DOKUMEN_VALID as readonly string[]).includes(String(parsed.jenis_dokumen));
     if (isTidakValid) {
       parsed.status_verifikasi = "TIDAK_VALID";
       parsed.jenis_dokumen = "LAINNYA";
@@ -584,130 +590,17 @@ export async function handleOcr(req: any, res: any) {
       });
     }
 
-    const kodeTiket = `TKT-${Date.now().toString().slice(-6)}`;
     const finalStatus = isBerhasil ? "BERHASIL" : "BURAM";
     const finalCatatan =
       parsed.catatan ||
       (isBerhasil
-        ? "Dokumen kependudukan valid dan terbaca jelas. QR Fast-Track terbit."
-        : "Dokumen kependudukan asli terdeteksi namun buram. QR tetap terbit — bawa fisik dokumen asli untuk verifikasi ulang di loket.");
+        ? "Dokumen kependudukan valid dan terbaca jelas. Hasil uji tersimpan — lanjutkan untuk menerbitkan tiket QR."
+        : "Dokumen kependudukan asli terdeteksi namun buram. Anda tetap dapat melanjutkan — tiket terbit dengan catatan revisi; bawa fisik dokumen asli untuk verifikasi ulang di loket.");
     parsed.catatan = finalCatatan;
+    parsed.status_verifikasi = finalStatus;
+    parsed.status_kualitas = isBerhasil ? "LAYAK" : "TIDAK_LAYAK";
 
-    // Nomor WA dikirim wizard sejak langkah 1 (opsional; alur tanpa formulir tak punya).
-    const scanPhone =
-      typeof bodyFields?.phone === "string" && bodyFields.phone.trim()
-        ? bodyFields.phone.trim()
-        : typeof bodyFields?.no_hp === "string" && bodyFields.no_hp.trim()
-          ? bodyFields.no_hp.trim()
-          : "";
-
-    const dbPayload: any = {
-      kode_tiket: kodeTiket,
-      nik: parsed.nik || "0000000000000000",
-      nama: parsed.nama || "Tidak Terdeteksi",
-      jenis_dokumen: parsed.jenis_dokumen || "LAINNYA",
-      skor_kejelasan: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 0,
-      status_verifikasi: finalStatus,
-      catatan: finalCatatan,
-    };
-    if (scanPhone) dbPayload.phone = scanPhone;
-
-    let ticketData: any = dbPayload;
-    let phoneSaved = false;
-    const supabase = getSupabase();
-    if (supabase) {
-      try {
-        let ins = await supabase.from("tickets").insert([dbPayload]).select();
-        // Fallback bila kolom phone belum dimigrasi di database.
-        if (ins.error && scanPhone && /phone/i.test(String(ins.error.message || ""))) {
-          try {
-            console.warn(`[ocr] kolom phone belum ada, nomor ${kodeTiket} tidak persist. Jalankan migrasi 20260928_tiket_phone.sql.`);
-          } catch {}
-          delete dbPayload.phone;
-          ins = await supabase.from("tickets").insert([dbPayload]).select();
-        }
-        if (!ins.error && ins.data && ins.data.length > 0) {
-          ticketData = ins.data[0];
-          if (scanPhone && (ticketData as any).phone) phoneSaved = true;
-        }
-        // Sembuhkan baris lama NIK sama yang belum punya nomor — best-effort.
-        if (scanPhone && parsed.nik) {
-          try {
-            await supabase
-              .from("tickets")
-              .update({ phone: scanPhone })
-              .eq("nik", String(parsed.nik).replace(/\D/g, ""))
-              .is("phone", null)
-              .neq("kode_tiket", kodeTiket);
-          } catch {}
-          try {
-            for (const t of memTickets) {
-              if ((t as any).nik_raw === parsed.nik && !(t as any).phone) (t as any).phone = scanPhone;
-            }
-          } catch {}
-        }
-      } catch {}
-    }
-
-    const maskedNik = maskNik(parsed.nik || "");
-    const inMemTicket: TicketRow = {
-      id: String((ticketData as any).id || Date.now()),
-      ticket_code: kodeTiket,
-      nik_encrypted: maskedNik === "320101******0000" && parsed.nik ? `${parsed.nik.slice(0, 6)}******${parsed.nik.slice(-4)}` : maskedNik,
-      nik_raw: parsed.nik || undefined,
-      nama_warga: parsed.nama || "Warga",
-      phone: scanPhone || "",
-      jenis_dokumen: parsed.jenis_dokumen || "LAINNYA",
-      status_verifikasi: isBerhasil ? "APPROVED" : "REVISI",
-      skor_ai: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 90,
-      status_ai: isBerhasil ? "LULUS" : "GAGAL",
-      catatan_ai: finalCatatan,
-      created_at: new Date().toISOString().replace("T", " ").slice(0, 16),
-      updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
-    };
-    memTickets.unshift(inMemTicket);
-    // Sembuhkan memori: baris NIK sama yang belum punya nomor ikut terisi.
-    if (scanPhone && parsed.nik) {
-      try {
-        for (const t of memTickets) {
-          if ((t as any).nik_raw === parsed.nik && !(t as any).phone) (t as any).phone = scanPhone;
-        }
-      } catch {}
-    }
-
-    // Arsip sementara foto terenkripsi (best-effort): petugas + warga pemilik
-    // bisa lihat sampai tiket diputus; tiket tetap valid bila arsip gagal.
-    if (fotoCopy && supabase) {
-      try {
-        const { simpanFotoTiket } = await import("./tiket-foto.js");
-        const saved = await simpanFotoTiket(kodeTiket, fotoCopy, mimeType);
-        if (saved.ok && saved.path) {
-          inMemTicket.foto_path = saved.path;
-          try {
-            await supabase
-              .from("tickets")
-              .update({ foto_path: saved.path, foto_iv: saved.ivHex })
-              .or(`kode_tiket.eq.${kodeTiket},id.eq.${(ticketData as any).id || ""}`);
-          } catch {}
-        }
-      } catch {}
-      try {
-        fotoCopy.fill(0);
-      } catch {}
-      fotoCopy = null;
-    }
-
-    const completeTicketResponse = {
-      ...ticketData,
-      ...inMemTicket,
-      kode_tiket: kodeTiket,
-      ticket_code: kodeTiket,
-      nama: parsed.nama || "Warga",
-      nama_warga: parsed.nama || "Warga",
-      skor_kejelasan: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 90,
-      catatan: finalCatatan,
-    };
-
+    // Log OCR attempt
     await logOcrAttempt({ ipHash, fileHash, mime: mimeType, sizeBytes: fileBytes.length, skor: parsed.skor_kejelasan ?? null, status: finalStatus, source: aiSource || "ai", latencyMs: Date.now() - ocrStart });
     try {
       res.setHeader("X-Ocr-Source", aiSource || "ai");
@@ -717,10 +610,7 @@ export async function handleOcr(req: any, res: any) {
       success: true,
       message: finalCatatan,
       needsRephoto: !isBerhasil,
-      source: aiSource || "ai",
-      phoneSaved,
-      data: { ...parsed, ticket: completeTicketResponse },
-      ticket: completeTicketResponse,
+      data: parsed,
       ...parsed,
     });
   } catch (error: any) {

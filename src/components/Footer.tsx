@@ -88,7 +88,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateHome, onRequestNav, on
           <div className="flex flex-col gap-2 text-sm text-slate-400">
             <span>Penerbitan Surat Pengantar KTP</span>
             <span>Perubahan Data Kartu Keluarga</span>
-            <span>Surat Keterangan Pindah (SKPWNI)</span>
+            <span>Surat Pindah (SKPWNI)</span>
             <span>Sinkronisasi NIK & Dukcapil</span>
             <span>Penerbitan Kartu Identitas Anak</span>
           </div>

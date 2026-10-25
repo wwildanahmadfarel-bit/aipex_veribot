@@ -29,8 +29,14 @@ import { classifyAiFailure } from "./api/_lib/ai-errors";
 import { WaError, isWaEnabled, normalizeWa, sendFonnteWa, ticketStatusMessage } from "./api/_lib/wa";
 import { isOfficerJwtConfigured, officerUnauthorized, requireOfficer, signOfficerToken } from "./api/_lib/officer-auth";
 import {
+  BUKAN_KTP_MESSAGE,
+  JENIS_DOKUMEN_VALID,
+  JENIS_NIK_OPSIONAL,
+  normalizeJenisDokumen,
+} from "./api/_lib/store";
+import { answerFaq, FAQ_EMERGENCY_REPLY } from "./api/_lib/faq";
+import {
   AI_PROVIDERS,
-  chatCompletionViaNaraRoute,
   getBynaraApiKey,
   getBynaraBaseURL,
   getNaraRouteApiKey,
@@ -88,29 +94,12 @@ function findFallbackOfficer(normalized: string) {
 }
 
 // --- Scanner KTP: normalisasi & pesan standar --------------------------------
-// Pesan baku saat file bukan KTP Indonesia (wajib dipakai frontend & backend)
-export const BUKAN_KTP_MESSAGE =
-  "File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang jelas dan tidak terpotong.";
+// Pesan baku saat file bukan dokumen kependudukan — satu sumber di api/_lib/store
+// (di-re-export agar impor lama dari server tetap bekerja).
+export { BUKAN_KTP_MESSAGE };
 
-// Normalisasi jenis dokumen hasil AI ke salah satu: KTP | KK | AKTA | LAINNYA
-// Jika user mengirim KTP (varian "e-KTP", "KTP-EL", "KARTU TANDA PENDUDUK") → "KTP".
-function normalizeJenisDokumen(raw: unknown): "KTP" | "KK" | "AKTA" | "LAINNYA" {
-  const upper = String(raw ?? "").toUpperCase().trim();
-  if (!upper) return "LAINNYA";
-  if (upper.includes("KTP") || upper.includes("TANDA PENDUDUK")) return "KTP";
-  if (
-    upper === "KK" ||
-    upper.startsWith("KK ") ||
-    upper.startsWith("KK-") ||
-    upper.includes("KARTU KELUARGA") ||
-    upper.includes("FAMILY CARD")
-  )
-    return "KK";
-  if (upper.includes("AKTA") || upper.includes("AKTE") || upper.includes("KELAHIRAN"))
-    return "AKTA";
-  if (upper === "KTP" || upper === "KK" || upper === "AKTA") return upper as any;
-  return "LAINNYA";
-}
+// Normalisasi jenis dokumen: satu sumber di api/_lib/store
+// (normalizeJenisDokumen — 7 jenis didukung + LAINNYA).
 
 // Normalisasi status verifikasi hasil AI ke: BERHASIL | BURAM | TIDAK_VALID
 function normalizeStatusVerifikasi(raw: unknown): "BERHASIL" | "BURAM" | "TIDAK_VALID" {
@@ -640,18 +629,22 @@ async function startServer() {
       const naraConfigured = isNaraRouteConfigured(naraApiKey) || isBynaraConfigured(naraApiKey);
       const client = getGeminiClient();
 
-      const systemInstructionText = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga / KK, dan Akta Kelahiran).
+      const systemInstructionText = `Anda adalah sistem AI Vision OCR profesional yang dikhususkan untuk menganalisis dan memverifikasi dokumen kependudukan resmi Indonesia (e-KTP, Kartu Keluarga/KK, KIA, akta kelahiran/kematian/perkawinan, dan Surat Pindah/SKPWNI).
 
 Tugas utama Anda:
 1. Identifikasi Jenis Dokumen (wajib tepat):
    - "KTP": e-KTP Republik Indonesia. Ciri wajib: ada tulisan "NIK" 16 digit, header provinsi/kabupaten, foto wajah, tulisan "KARTU TANDA PENDUDUK" / "e-KTP". Varian tulisan "e-KTP", "KTP-EL", "KTP EL" semuanya tetap "KTP".
    - "KK": Kartu Keluarga.
-   - "AKTA": Akta Kelahiran.
-   - "LAINNYA": WAJIB dipakai jika gambar BUKAN salah satu dari ketiga dokumen di atas (misal: SIM, paspor, foto selfie, screenshot HP, dokumen asing, kertas kosong, foto blur total tanpa ciri Dukcapil).
+   - "AKTA": Akta Kelahiran (kutipan akta kelahiran).
+   - "AKTA_KEMATIAN": Akta Kematian / kutipan akta kematian Dukcapil, atau surat keterangan kematian resmi (RS/dokter/kelurahan).
+   - "AKTA_PERKAWINAN": Akta Perkawinan / kutipan akta perkawinan (termasuk perkawinan non-Muslim yang dilegalisasi).
+   - "SURAT_PINDAH": Surat Keterangan Pindah WNI (SKPWNI) atau formulir permohonan pindah penduduk.
+   - "KIA": Kartu Identitas Anak.
+   - "LAINNYA": WAJIB dipakai HANYA jika gambar bukan salah satu dari ketujuh dokumen di atas (misal: SIM, paspor, foto selfie, screenshot HP, dokumen asing, kertas kosong, foto blur total tanpa ciri Dukcapil).
 
 2. Ekstraksi Data Utama:
-   - NIK: Cari 16-digit Nomor Induk Kependudukan. Bersihkan dari spasi atau simbol. Jika tidak ditemukan, kabur, atau tidak bernilai 16 digit, set ke null.
-   - Nama: Ambil nama lengkap pemilik dokumen sesuai teks resmi. Jika bukan dokumen Dukcapil, set ke null.
+   - NIK: Cari 16-digit Nomor Induk Kependudukan (pada akta kematian: NIK almarhum; pada akta perkawinan: NIK yang paling jelas). Bersihkan dari spasi atau simbol. Jika tidak ditemukan, kabur, atau tidak bernilai 16 digit, set ke null — dokumen non-kartu tetap valid walau NIK null.
+   - Nama: Ambil nama lengkap utama sesuai teks resmi (pemilik dokumen / almarhum / pasangan / anak). Jika bukan dokumen Dukcapil, set ke null.
 
 3. Evaluasi Kualitas Fisik & Kejelasan Foto:
    - Periksa kejelasan teks (apakah terjadi motion blur atau out-of-focus).
@@ -665,13 +658,13 @@ Tugas utama Anda:
    - 0 - 25: Bukan dokumen kependudukan (wajib skor rendah).
 
 5. Penentuan Status Verifikasi (wajib konsisten dengan jenis):
-   - "BERHASIL": Dokumen valid (KTP/KK/AKTA) dan skor kejelasan >= 70.
-   - "BURAM": Dokumen kependudukan asli (KTP/KK/AKTA), namun skor kejelasan < 70 (memerlukan foto ulang).
+   - "BERHASIL": Dokumen kependudukan yang didukung (KTP/KK/AKTA/AKTA_KEMATIAN/AKTA_PERKAWINAN/SURAT_PINDAH/KIA) dan skor kejelasan >= 70.
+   - "BURAM": Dokumen kependudukan yang didukung, namun skor kejelasan < 70 (memerlukan foto ulang).
    - "TIDAK_VALID": WAJIB dipakai jika jenis_dokumen "LAINNYA" (gambar bukan dokumen kependudukan resmi Indonesia).
 
-6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen KTP/KK/AKTA):
+6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen kependudukan yang didukung, bukan LAINNYA):
    - Identifikasi bagian dokumen yang buram, silau, gelap, terpotong, atau tidak terbaca.
-   - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", atau "lainnya".
+   - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", "nomor_akta", "tanggal_peristiwa", "pasangan", atau "lainnya".
    - "severity": "high" (teks kunci tidak terbaca), "medium" (terbaca sebagian), "low" (terbaca namun kurang tajam).
    - "bbox": [x, y, width, height] dalam PERSEN 0-100 relatif terhadap gambar, (x, y) = pojok kiri atas area. Perkiraan posisi yang wajar sudah cukup.
    - "description": penyebab singkat, contoh "motion blur", "silau flash", "kurang cahaya", "bayangan", "terpotong", "out of focus".
@@ -680,14 +673,14 @@ Tugas utama Anda:
 
 7. Catatan Perbaikan (Saran Singkat):
    - Jika status BURAM, berikan 1 kalimat saran konkret (contoh: "Foto KTP terlalu silau di area NIK, harap matikan lampu flash dan ambil ulang foto di tempat terang").
-   - Jika status TIDAK_VALID, WAJIB awali catatan dengan kalimat persis: "File bukan Kartu Kependudukan Indonesia." lalu lanjutkan saran unggah e-KTP asli.
+   - Jika status TIDAK_VALID, WAJIB awali catatan dengan kalimat persis: "File bukan Kartu Kependudukan Indonesia." lalu lanjutkan saran mengunggah foto dokumen kependudukan yang didukung (e-KTP, KK, KIA, akta kelahiran/kematian/perkawinan, atau Surat Pindah/SKPWNI).
 
 PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan, blur_areas.`;
 
       const userPrompt = "Analisis foto dokumen kependudukan ini. Periksa kejelasan teks, ekstrak NIK 16 digit jika ada, dan tentukan apakah foto layak untuk verifikasi.";
 
       // Urutan fallback: model terbaru dulu; yang deprecated/penuh dilewati otomatis.
-      const ocrModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
+      const ocrModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"];
       let responseText = "";
       let lastAiError = "";
       const isPdf = /pdf/i.test(mimeType || "");
@@ -735,7 +728,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
                   },
                   jenis_dokumen: {
                     type: "STRING",
-                    description: "KTP, KK, AKTA, atau LAINNYA",
+                    description: "KTP, KK, AKTA, AKTA_KEMATIAN, AKTA_PERKAWINAN, SURAT_PINDAH, KIA, atau LAINNYA",
                   },
                   skor_kejelasan: {
                     type: "INTEGER",
@@ -978,7 +971,13 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
             parsed.nik_partial = nikDigits;
           }
           parsed.nik = null;
-          if (parsed.status_verifikasi === "BERHASIL") {
+          // Untuk dokumen non-kartu (akta kematian/perkawinan & surat pindah),
+          // NIK memang sering tidak tercantum → cukup kosongkan, jangan
+          // menurunkan vonis BERHASIL menjadi BURAM.
+          if (
+            parsed.status_verifikasi === "BERHASIL" &&
+            !(JENIS_NIK_OPSIONAL as readonly string[]).includes(String(parsed.jenis_dokumen))
+          ) {
             parsed.status_verifikasi = "BURAM";
             parsed.catatan =
               nikDigits.length === 16
@@ -1023,7 +1022,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       const isBuramValid =
         parsed.status_verifikasi === "BURAM" &&
         !isTidakValid &&
-        ["KTP", "KK", "AKTA"].includes(parsed.jenis_dokumen);
+        (JENIS_DOKUMEN_VALID as readonly string[]).includes(String(parsed.jenis_dokumen));
       // Koreksi final: BERHASIL palsu tidak boleh lolos
       if (isTidakValid) {
         parsed.status_verifikasi = "TIDAK_VALID";
@@ -1044,9 +1043,8 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         });
       }
 
-      // Dokumen valid (BERHASIL maupun BURAM) → SELALU buat tiket + QR.
-      // BERHASIL = Fast-Track LULUS. BURAM = dokumen asli tapi buram → tiket REVISI
-      // dengan catatan foto ulang / bawa fisik ke loket (tetap dapat QR).
+      // Dokumen valid (BERHASIL maupun BURAM) → KEMBALIKAN HASIL VERIFIKASI SAJA.
+      // Tiket dibuat di /api/tickets oleh wizard agar 1 submission = 1 tiket.
       const isValidDoc = isBerhasil || isBuramValid;
       if (!isValidDoc) {
         return res.json({
@@ -1057,156 +1055,27 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         });
       }
       
-      // Simpan Otomatis ke Tabel Supabase 'tickets' (BERHASIL + BURAM valid)
-      const kodeTiket = `TKT-${Date.now().toString().slice(-6)}`;
       const finalStatus = isBerhasil ? "BERHASIL" : "BURAM";
-      const finalCatatan =
+      const finalCataten =
         parsed.catatan ||
         (isBerhasil
-          ? "Dokumen kependudukan valid dan terbaca jelas. QR Fast-Track terbit."
-          : "Dokumen kependudukan asli terdeteksi namun buram. QR tetap terbit — bawa fisik dokumen asli untuk verifikasi ulang di loket.");
-      parsed.catatan = finalCatatan;
+          ? "Dokumen kependudukan valid dan terbaca jelas. Hasil uji tersimpan — lanjutkan untuk menerbitkan tiket QR."
+          : "Dokumen kependudukan asli terdeteksi namun buram. Anda tetap dapat melanjutkan — tiket terbit dengan catatan revisi; bawa fisik dokumen asli untuk verifikasi ulang di loket.");
+      parsed.catatan = finalCataten;
+      parsed.status_verifikasi = finalStatus;
+      parsed.status_kualitas = isBerhasil ? "LAYAK" : "TIDAK_LAYAK";
 
-      const dbPayload: any = {
-        kode_tiket: kodeTiket,
-        nik: parsed.nik || "0000000000000000",
-        nama: parsed.nama || "Tidak Terdeteksi",
-        jenis_dokumen: parsed.jenis_dokumen || "LAINNYA",
-        skor_kejelasan: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 0,
-        status_verifikasi: finalStatus,
-        catatan: finalCatatan,
-      };
-      // Nomor WA dari wizard (langkah 1); alur tanpa formulir tidak punya.
-      const scanPhone =
-        typeof bodyF.phone === "string" && bodyF.phone.trim()
-          ? bodyF.phone.trim()
-          : typeof bodyF.no_hp === "string" && bodyF.no_hp.trim()
-            ? bodyF.no_hp.trim()
-            : "";
-      if (scanPhone) dbPayload.phone = scanPhone;
-      
-      let ticketData: any = dbPayload;
-      let phoneSaved = false;
-      
-      if (supabase) {
-        try {
-          // Insert ke Supabase
-          let ins = await supabase.from("tickets").insert([dbPayload]).select();
-          // Fallback bila kolom phone belum dimigrasi di database.
-          if (ins.error && scanPhone && /phone/i.test(String((ins.error as any)?.message || ""))) {
-            try {
-              console.warn(`[ocr] kolom phone belum ada, nomor ${kodeTiket} tidak persist. Jalankan migrasi 20260928_tiket_phone.sql.`);
-            } catch {}
-            delete dbPayload.phone;
-            ins = await supabase.from("tickets").insert([dbPayload]).select();
-          }
-          const { data, error } = ins;
-          if (error) {
-            console.error("Supabase insert error:", error);
-          } else if (data && data.length > 0) {
-            ticketData = data[0];
-            if (scanPhone && (ticketData as any).phone) phoneSaved = true;
-          }
-          // Sembuhkan baris lama NIK sama yang belum punya nomor — best-effort.
-          if (scanPhone && parsed.nik) {
-            try {
-              await supabase
-                .from("tickets")
-                .update({ phone: scanPhone })
-                .eq("nik", String(parsed.nik).replace(/\D/g, ""))
-                .is("phone", null)
-                .neq("kode_tiket", kodeTiket);
-            } catch {}
-            try {
-              for (const t of tickets) {
-                if ((t as any).nik_raw === parsed.nik && !(t as any).phone) (t as any).phone = scanPhone;
-              }
-            } catch {}
-          }
-        } catch (supabaseError) {
-          console.error("Failed to save to Supabase:", supabaseError);
-        }
-      }
-
-      // Keep in-memory store updated for UI consistency
-      const maskedNik = parsed.nik && parsed.nik.length >= 12
-        ? `${parsed.nik.slice(0, 6)}******${parsed.nik.slice(-4)}`
-        : (parsed.nik ? `${parsed.nik.slice(0, 3)}***${parsed.nik.slice(-2)}` : "320101******0000");
-
-      const inMemTicket: Ticket = {
-        id: String(ticketData.id || Date.now()),
-        ticket_code: kodeTiket,
-        nik_encrypted: maskedNik,
-        nik_raw: parsed.nik || undefined,
-        nama_warga: parsed.nama || "Warga",
-        phone: scanPhone || "",
-        jenis_dokumen: parsed.jenis_dokumen || "LAINNYA",
-        status_verifikasi: isBerhasil ? "APPROVED" : "REVISI",
-        skor_ai: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 90,
-        status_ai: isBerhasil ? "LULUS" : "GAGAL",
-        catatan_ai: finalCatatan,
-        created_at: new Date().toISOString().replace("T", " ").slice(0, 16),
-        updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
-      };
-      tickets.unshift(inMemTicket);
-
-      // Sembuhkan memori: baris NIK sama yang belum punya nomor ikut terisi.
-      if (scanPhone && parsed.nik) {
-        try {
-          for (const t of tickets) {
-            if ((t as any).nik_raw === parsed.nik && !(t as any).phone) (t as any).phone = scanPhone;
-          }
-        } catch {}
-      }
-
-      // Arsip sementara foto terenkripsi (best-effort): tiket tetap valid bila gagal.
-      if (fotoCopy && supabase) {
-        try {
-          const { simpanFotoTiket } = await import("./api/_lib/tiket-foto");
-          const saved = await simpanFotoTiket(kodeTiket, fotoCopy, mimeType);
-          if (saved.ok && saved.path) {
-            inMemTicket.foto_path = saved.path;
-            try {
-              await supabase
-                .from("tickets")
-                .update({ foto_path: saved.path, foto_iv: saved.ivHex })
-                .or(`kode_tiket.eq.${kodeTiket},id.eq.${ticketData.id || ""}`);
-            } catch {}
-          }
-        } catch {}
-        try {
-          fotoCopy.fill(0);
-        } catch {}
-        fotoCopy = null;
-      }
-
-      const completeTicketResponse = {
-        ...ticketData,
-        ...inMemTicket,
-        kode_tiket: kodeTiket,
-        ticket_code: kodeTiket,
-        nama: parsed.nama || "Warga",
-        nama_warga: parsed.nama || "Warga",
-        skor_kejelasan: typeof parsed.skor_kejelasan === "number" ? parsed.skor_kejelasan : 90,
-        catatan: finalCatatan,
-      };
-
+      // Log OCR attempt
       await logOcrAttempt({ ipHash, fileHash, mime: mimeType, sizeBytes: fileBytes.length, skor: parsed.skor_kejelasan ?? null, status: finalStatus, source: aiSource || "ai", latencyMs: Date.now() - ocrStart });
       try {
         res.setHeader("X-Ocr-Source", aiSource || "ai");
         res.setHeader("X-RateLimit-Remaining", String(rl.remaining10));
       } catch {}
-      res.json({
+      return res.json({
         success: true,
-        message: finalCatatan,
+        message: finalCataten,
         needsRephoto: !isBerhasil,
-        source: aiSource || "ai",
-        phoneSaved,
-        data: {
-          ...parsed,
-          ticket: completeTicketResponse,
-        },
-        ticket: completeTicketResponse,
+        data: parsed,
         ...parsed,
       });
     } catch (error: any) {
@@ -1332,13 +1201,14 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
               ticket_code: data.kode_tiket,
               kode_tiket: data.kode_tiket,
               nik_encrypted: masked,
-              nik_raw: rawNik,
+              // nik_raw removed for privacy (UU PDP)
               nama_warga: data.nama || "Warga",
               nama: data.nama || "Warga",
-              phone: data.phone || "",
-              alamat: data.alamat || "",
+              // phone and alamat removed from public response for privacy
               jenis_dokumen: data.jenis_dokumen || "KTP",
-              status_verifikasi: data.status_verifikasi === "BERHASIL" ? "APPROVED" : (data.status_verifikasi === "BURAM" ? "REVISI" : (data.status_verifikasi || "PENDING")),
+              // BERHASIL = lolos uji kejelasan AI, MASIH menunggu verifikasi petugas.
+              // Jangan tampilkan "disetujui/siap cetak" ke publik sebelum petugas memutuskan.
+              status_verifikasi: data.status_verifikasi === "BERHASIL" ? "MENUNGGU" : (data.status_verifikasi === "BURAM" ? "REVISI" : (data.status_verifikasi === "PENDING" ? "MENUNGGU" : (data.status_verifikasi || "PENDING"))),
               skor_ai: data.skor_kejelasan || 90,
               skor_kejelasan: data.skor_kejelasan || 90,
               status_ai: data.status_verifikasi === "BERHASIL" || (data.skor_kejelasan >= 70) ? "LULUS" : "GAGAL",
@@ -1359,12 +1229,35 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
           (t) => t.ticket_code.toUpperCase() === kodeTiket || (t as any).kode_tiket?.toUpperCase() === kodeTiket
         );
         if (memTicket) {
+          // Map to public format (apply same privacy/status mapping)
+          const rawNik = memTicket.nik_raw || "";
+          const masked = rawNik.length >= 12
+            ? `${rawNik.slice(0, 6)}******${rawNik.slice(-4)}`
+            : (rawNik ? `${rawNik.slice(0, 3)}***${rawNik.slice(-2)}` : "320101******0000");
+          const statusVerif = memTicket.status_verifikasi === "BERHASIL" ? "MENUNGGU" :
+            memTicket.status_verifikasi === "BURAM" ? "REVISI" :
+            memTicket.status_verifikasi === "PENDING" ? "MENUNGGU" :
+            memTicket.status_verifikasi || "PENDING";
+
           found = {
-            ...memTicket,
+            id: String(memTicket.id || memTicket.ticket_code),
+            ticket_code: memTicket.ticket_code,
             kode_tiket: memTicket.ticket_code,
+            nik_encrypted: masked,
+            // nik_raw removed for privacy
+            nama_warga: memTicket.nama_warga,
             nama: memTicket.nama_warga,
+            // phone and alamat removed for privacy
+            jenis_dokumen: memTicket.jenis_dokumen,
+            status_verifikasi: statusVerif,
+            skor_ai: memTicket.skor_ai,
             skor_kejelasan: memTicket.skor_ai,
+            status_ai: memTicket.status_ai,
+            catatan_ai: memTicket.catatan_ai,
             catatan: memTicket.catatan_ai,
+            catatan_petugas: memTicket.catatan_petugas || "",
+            created_at: memTicket.created_at,
+            updated_at: memTicket.updated_at,
           };
         }
       }
@@ -1411,11 +1304,13 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
               ticket_code: row.kode_tiket,
               kode_tiket: row.kode_tiket,
               nik_encrypted: masked,
-              nik_raw: rawNik,
+              // nik_raw removed for privacy (UU PDP)
               nama_warga: row.nama || "Warga",
               nama: row.nama || "Warga",
+              // phone and alamat removed from public list for privacy
               jenis_dokumen: row.jenis_dokumen || "KTP",
-              status_verifikasi: row.status_verifikasi === "BERHASIL" ? "APPROVED" : (row.status_verifikasi === "BURAM" ? "REVISI" : (row.status_verifikasi || "PENDING")),
+              // BERHASIL = menunggu verifikasi petugas (lihat catatan di handler :kode_tiket).
+              status_verifikasi: row.status_verifikasi === "BERHASIL" ? "MENUNGGU" : (row.status_verifikasi === "BURAM" ? "REVISI" : (row.status_verifikasi === "PENDING" ? "MENUNGGU" : (row.status_verifikasi || "PENDING"))),
               skor_ai: row.skor_kejelasan || 90,
               skor_kejelasan: row.skor_kejelasan || 90,
               status_ai: row.status_verifikasi === "BERHASIL" || (row.skor_kejelasan >= 70) ? "LULUS" : "GAGAL",
@@ -1437,10 +1332,22 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       console.warn("Supabase fetch all tickets warning:", err);
     }
 
+    // Map in-memory tickets to public format (without nik_raw, phone, alamat)
+    const publicTickets = tickets.map((t: any) => ({
+      ...t,
+      // nik_raw removed for privacy (UU PDP)
+      nik_raw: undefined,
+      phone: undefined,
+      alamat: undefined,
+      // BERHASIL (lolos uji kejelasan) & PENDING sama-sama menunggu petugas.
+      status_verifikasi:
+        t.status_verifikasi === "PENDING" || t.status_verifikasi === "BERHASIL" ? "MENUNGGU" : t.status_verifikasi,
+    }));
+
     res.json({
       success: true,
-      data: tickets,
-      total: tickets.length,
+      data: publicTickets,
+      total: publicTickets.length,
     });
   });
 
@@ -1469,20 +1376,11 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         verification,
       } = req.body;
 
-      if (!nama_warga || !nik) {
-        return res.status(400).json({ success: false, message: "NIK dan Nama warga wajib diisi." });
+      if (!nama_warga) {
+        return res.status(400).json({ success: false, message: "Nama warga wajib diisi." });
       }
 
-      // NIK wajib 16 digit angka
-      const nikDigits = String(nik).replace(/\D/g, "");
-      if (nikDigits.length !== 16) {
-        return res.status(400).json({
-          success: false,
-          message: "NIK harus 16 digit angka. Tiket tidak dapat diterbitkan.",
-        });
-      }
-
-      // Validasi bukti scan: tolak jika terdeteksi BUKAN dokumen kependudukan.
+      // Validasi bukti scan terlebih dahulu (menentukan aturan NIK per jenis dokumen).
       // Frontend wajib mengirim scan_jenis_dokumen + scan_status_verifikasi dari hasil OCR.
       const scanJenisRaw =
         scan_jenis_dokumen ?? jenis_dokumen_scan ?? (verification as any)?.jenis_dokumen ?? null;
@@ -1496,7 +1394,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         return res.status(400).json({
           success: false,
           message:
-            "Wajib verifikasi dokumen via scanner terlebih dahulu. Unggah foto e-KTP asli hingga terdeteksi sebagai dokumen kependudukan.",
+            "Wajib verifikasi dokumen via scanner terlebih dahulu. Unggah foto dokumen kependudukan asli hingga terdeteksi sebagai dokumen yang didukung.",
         });
       }
       const scanJenis = normalizeJenisDokumen(scanJenisRaw);
@@ -1515,6 +1413,23 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         });
       }
 
+      // NIK wajib 16 digit untuk dokumen berkartu (KTP/KK/AKTA/KIA); opsional
+      // untuk akta kematian/perkawinan & surat pindah (dokumen lama sering tanpa NIK).
+      const nikDigits = String(nik ?? "").replace(/\D/g, "");
+      const nikOpsional = JENIS_NIK_OPSIONAL.includes(scanJenis);
+      if (!nikOpsional && nikDigits.length !== 16) {
+        return res.status(400).json({
+          success: false,
+          message: "NIK harus 16 digit angka. Tiket tidak dapat diterbitkan.",
+        });
+      }
+      if (nikOpsional && nikDigits.length > 0 && nikDigits.length !== 16) {
+        return res.status(400).json({
+          success: false,
+          message: "NIK opsional untuk jenis dokumen ini — jika diisi harus 16 digit angka.",
+        });
+      }
+
       // Generate Ticket Code: TKT-YYYYMM-XXXX
       const date = new Date();
       const yearMonth = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}`;
@@ -1522,13 +1437,15 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       const ticketCode = `TKT-${yearMonth}-${randomCode}`;
 
       // Masked NIK for UU PDP privacy compliance
-      const maskedNik = nikDigits.length >= 12
-        ? `${nikDigits.slice(0, 6)}******${nikDigits.slice(-4)}`
-        : `${nikDigits.slice(0, 3)}***${nikDigits.slice(-2)}`;
+      const maskedNik = !nikDigits
+        ? "Tanpa NIK (opsional)"
+        : nikDigits.length >= 12
+          ? `${nikDigits.slice(0, 6)}******${nikDigits.slice(-4)}`
+          : `${nikDigits.slice(0, 3)}***${nikDigits.slice(-2)}`;
 
       // Status awal mengikuti hasil scan: BERHASIL → PENDING (siap verifikasi petugas),
       // BURAM valid → REVISI (wajib bawa fisik + foto ulang di loket).
-      const awalStatusVerifikasi = scanStatus === "BURAM" ? "REVISI" : "PENDING";
+      const awalStatusVerifikasi = "PENDING"; // Semua tiket baru mulai dari PENDING
       const awalCatatan =
         catatan_ai ||
         (scanStatus === "BURAM"
@@ -1554,7 +1471,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
 
       tickets.unshift(newTicket);
       // Sembuhkan baris NIK sama yang belum punya nomor (mis. tiket hasil pindai).
-      if (phone) {
+      if (phone && nikDigits) {
         try {
           for (const t of tickets) {
             if ((t as any).nik_raw === nikDigits && !(t as any).phone) (t as any).phone = String(phone);
@@ -1562,7 +1479,10 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         } catch {}
       }
 
-      // Simpan ke Supabase jika tersedia
+      // Simpan ke Supabase jika tersedia. phoneSaved dihitung dari HASIL insert
+      // yang sebenarnya (supabase-js TIDAK throw saat error — cek .error), agar
+      // UI tidak pernah menampilkan "Nomor WA tersimpan" secara palsu.
+      let phoneSaved = false;
       if (supabase) {
         try {
           const dbPayload: any = {
@@ -1571,27 +1491,28 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
             nama: nama_warga,
             jenis_dokumen: jenis_dokumen || "KTP",
             skor_kejelasan: Number(skor_ai) || 88,
-            status_verifikasi: scanStatus === "BURAM" ? "BURAM" : "BERHASIL",
+            status_verifikasi: "PENDING", // Semua tiket baru mulai dari PENDING di DB
             catatan: awalCatatan,
           };
           if (phone) dbPayload.phone = String(phone);
-          let phoneSaved = false;
-          try {
-            await supabase.from("tickets").insert([dbPayload]);
-            if (phone) phoneSaved = true;
-          } catch (firstErr: any) {
-            // Fallback bila kolom phone belum dimigrasi di database.
-            if (phone && /phone/i.test(String(firstErr?.message || ""))) {
-              try {
-                console.warn(`[tickets POST] kolom phone belum ada, nomor ${ticketCode} tidak persist. Jalankan migrasi 20260928_tiket_phone.sql.`);
-              } catch {}
-              delete dbPayload.phone;
-              await supabase.from("tickets").insert([dbPayload]);
-            } else {
-              throw firstErr;
-            }
+          if (alamat) dbPayload.alamat = String(alamat);
+          let ins = await supabase.from("tickets").insert([dbPayload]);
+          // Fallback kolom belum dimigrasi (phone/alamat): buang kolom itu lalu
+          // ulangi — tiket TIDAK boleh gagal terbit hanya karena kolom belum ada.
+          for (let attempt = 0; attempt < 2 && ins.error; attempt++) {
+            const errMsg = String(ins.error.message || "");
+            const kolomHilang = /phone/i.test(errMsg) ? "phone" : /alamat/i.test(errMsg) ? "alamat" : null;
+            if (!kolomHilang || !dbPayload[kolomHilang]) break;
+            try {
+              console.warn(`[tickets POST] kolom ${kolomHilang} belum ada — tiket ${ticketCode} disimpan tanpa kolom itu. Jalankan migrasi supabase/migrations.`);
+            } catch {}
+            delete dbPayload[kolomHilang];
+            ins = await supabase.from("tickets").insert([dbPayload]);
           }
-          if (phoneSaved) {
+          if (ins.error) {
+            console.warn("Supabase insert warning for new ticket:", ins.error);
+          } else if (phone && dbPayload.phone && nikDigits) {
+            phoneSaved = true;
             // Sembuhkan baris lama NIK sama yang belum punya nomor — best-effort.
             try {
               await supabase
@@ -1611,16 +1532,23 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         success: true,
         data: newTicket,
         ticket: newTicket,
-        phoneSaved: Boolean(phone),
-        message: "Tiket Fast-Track berhasil diterbitkan.",
+        phoneSaved,
+        message: phoneSaved
+          ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA tersimpan."
+          : phone
+            ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA belum tersimpan di server — petugas akan verifikasi manual."
+            : "Tiket Fast-Track berhasil diterbitkan.",
       });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }
   });
 
-  // 5. Update Ticket Status (Petugas Loket 1-Click Action)
+  // 5. Update Ticket Status (fallback lama; WAJIB Bearer petugas — jalur admin
+  // utama: /api/admin/tickets yang mencatat audit + mengirim notifikasi WA).
   app.patch("/api/tickets/:id", async (req, res) => {
+    const auth = requireOfficer(req);
+    if (!auth.ok) return officerUnauthorized(res, auth.error);
     const { id } = req.params;
     const { status_verifikasi, catatan_petugas } = req.body;
 
@@ -1664,7 +1592,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     });
   });
 
-  // 6. Gemini FAQ Chatbot with Multi-Model Fallback & Knowledge Base
+  // 6. FAQ Chatbot - logika bersama api/_lib/faq.ts (dev & produksi)
   app.post("/api/chat-faq", async (req, res) => {
     try {
       const { message } = req.body;
@@ -1677,137 +1605,18 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         return res.status(429).json({ success: false, code: "RATE_LIMITED", message: `Terlalu banyak pertanyaan dalam waktu singkat. Coba lagi dalam ${Math.ceil(chatRl.retryAfterSec / 60)} menit.`, retryAfter: chatRl.retryAfterSec });
       }
 
-      // Offline knowledge base resolver for 24/7 uninterrupted responses
-      const getOfflineFaqAnswer = (text: string): string => {
-        const lower = text.toLowerCase();
-
-        if (lower.includes("jam") || lower.includes("buka") || lower.includes("operasional") || lower.includes("tutup") || lower.includes("jadwal")) {
-          return "🕒 **Jam Operasional Loket Kelurahan Sukamaju:**\n• **Senin - Kamis:** 08.00 - 15.30 WIB\n• **Jumat:** 08.00 - 14.30 WIB\n• **Sabtu, Minggu & Libur Nasional:** Loket fisik tutup.\n\nLayanan online mandiri **AIPEX VeriBot** tetap aktif 24 jam nonstop untuk pra-pemeriksaan berkas dan tiket antrean Fast-Track!";
-        }
-
-        if (lower.includes("ktp") || lower.includes("e-ktp")) {
-          if (lower.includes("hilang")) {
-            return "🪪 **Syarat Pengurusan KTP Hilang:**\n1. Surat Keterangan Kehilangan dari Polsek setempat.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak perlu surat pengantar RT/RW (Perpres No. 96/2018).\n\n💡 *Tips:* Unggah foto berkas KK Anda di menu pra-pemeriksaan untuk mendapatkan Tiket Fast-Track tanpa antre lama di loket!";
-          }
-          if (lower.includes("rusak")) {
-            return "🪪 **Syarat Penggantian KTP Rusak:**\n1. Membawa fisik e-KTP lama yang rusak.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak dipungut biaya (Gratis 100%).\n\nSilakan gunakan fitur OCR VeriBot untuk memverifikasi kejelasan dokumen sebelum ke kantor kelurahan.";
-          }
-          return "🪪 **Syarat Pembuatan KTP-EL Baru (Pemula Usia 17 Tahun):**\n1. Cukup bawa Fotokopi Kartu Keluarga (KK).\n2. Tidak memerlukan surat pengantar RT/RW sesuai Perpres No. 96 Tahun 2018.\n3. Perekaman foto & sidik jari dilakukan langsung di loket kelurahan.\n\nUnggah foto KK Anda sekarang untuk reservasi antrean Fast-Track!";
-        }
-
-        if (lower.includes("fast-track") || lower.includes("tiket") || lower.includes("antre") || lower.includes("prioritas") || lower.includes("qr")) {
-          return "⚡ **Jalur Fast-Track Tiket VeriBot:**\nWarga yang berkas kependudukannya lulus uji pra-pemeriksaan AI (skor kejelasan minimal 70-75%) otomatis memperoleh **Tiket QR Code Fast-Track**.\n\nSaat tiba di kantor kelurahan, Anda cukup memindai QR Code di loket prioritas untuk langsung dipanggil petugas tanpa perlu antre manual dan tanpa mengisi formulir kertas ulang.";
-        }
-
-        if (lower.includes("kia") || lower.includes("anak")) {
-          return "👶 **Syarat Kartu Identitas Anak (KIA):**\n1. Fotokopi Akta Kelahiran anak.\n2. Fotokopi Kartu Keluarga (KK) orang tua.\n3. Fotokopi KTP-EL kedua orang tua.\n4. Pasfoto berwarna ukuran 3x4 sebanyak 2 lembar (khusus anak usia di atas 5 tahun). Untuk usia 0-5 tahun tidak memerlukan foto.";
-        }
-
-        if (lower.includes("kk") || lower.includes("kartu keluarga")) {
-          return "👨‍👩‍👧‍👦 **Layanan Kartu Keluarga (KK):**\n• **Penambahan Anggota (Kelahiran):** KK lama, Surat Keterangan Lahir / Akta Lahir, KTP orang tua.\n• **Perubahan Data:** KK lama & dokumen pendukung (ijazah, akta nikah, surat pindah).\n• **Penerbitan Baru:** Buku Nikah/Akta Perkawinan, KK asal masing-masing suami & istri.";
-        }
-
-        if (lower.includes("akta") || lower.includes("lahir") || lower.includes("mati") || lower.includes("kematian") || lower.includes("nikah")) {
-          return "📜 **Layanan Akta Pencatatan Sipil:**\n• **Akta Kelahiran:** Surat Keterangan Lahir dari Bidan/RS, Buku Nikah/Akta Perkawinan, KK, dan KTP orang tua.\n• **Akta Kematian:** Surat Kematian dari RS/Dokter/Kelurahan, KTP almarhum, KK, KTP pelapor & 2 saksi.\n• **Akta Perkawinan Non-Muslim:** Surat Pemberkatan dari Pemuka Agama, KTP suami istri, KK, pasfoto berdampingan.";
-        }
-
-        if (lower.includes("rt") || lower.includes("rw") || lower.includes("pengantar")) {
-          return "📜 Sesuai amanat **Perpres No. 96 Tahun 2018**, pengurusan dokumen kependudukan dasar (seperti KTP-EL baru/rusak/hilang, Akta Kelahiran, dan pembaruan KK) **tidak lagi memerlukan surat pengantar RT/RW** sepanjang NIK sudah terdaftar aktif di Ditjen Dukcapil.";
-        }
-
-        if (lower.includes("pdp") || lower.includes("privasi") || lower.includes("aman") || lower.includes("ram") || lower.includes("keamanan")) {
-          return "🛡️ **Kepatuhan Privasi UU PDP (UU No. 27 Tahun 2022):**\nSeluruh berkas foto e-KTP dan KK yang diunggah warga diproses murni di memori sementara (In-Memory RAM) dan otomatis dihapus saat analisis selesai. Sistem tidak menyimpan foto dokumen ke hard disk/database.";
-        }
-
-        if (lower.includes("lokasi") || lower.includes("alamat") || lower.includes("kantor") || lower.includes("kontak") || lower.includes("telepon") || lower.includes("whatsapp") || lower.includes("wa")) {
-          return "📍 **Kantor Kelurahan Sukamaju:**\n• **Alamat:** Jl. Praja Abdi No. 45, Kecamatan Maju Sejahtera\n• **WhatsApp / Call Center:** +62 811-2345-6789\n• **Email Resmi:** layanan@sukamaju.desa.id\n• **Website / VeriBot:** 24 Jam Mandiri Online";
-        }
-
-        return "Halo Warga Sukamaju! Saya **VeriBot AI**, asisten cerdas pelayanan kependudukan Kelurahan Sukamaju.\n\nSilakan tanyakan seputar:\n• Syarat KTP-EL Baru / Hilang / Rusak\n• Prosedur Jalur Antrean Cepat (Fast-Track Tiket QR)\n• Pembuatan KIA, KK, dan Akta Pencatatan Sipil\n• Jadwal loket & standar pelayanan tanpa surat pengantar RT/RW.";
-      };
-
-      const client = getGeminiClient();
-      const naraApiKey = extractNaraApiKey(req) || extractBynaraApiKey(req);
-
-      const systemPrompt = `Anda adalah "Asisten Pintar VeriBot", petugas customer service AI resmi Kelurahan Sukamaju (Kecamatan Maju Sejahtera) dalam sistem AIPEX VeriBot (DIGIForward 2026).
-Tugas Anda adalah melayani warga kelurahan secara ramah, sopan, ringkas, dan jelas dalam bahasa Indonesia.
-
-Informasi Resmi Kelurahan Sukamaju:
-- Jam Operasional Loket Fisik:
-  * Senin s.d. Kamis: 08.00 - 15.30 WIB
-  * Jumat: 08.00 - 14.30 WIB
-  * Sabtu, Minggu, & Libur Nasional: Tutup (Layanan Mandiri Online VeriBot 24 Jam Non-Stop)
-- Alamat: Jl. Praja Abdi No. 45, Kecamatan Maju Sejahtera
-- Call Center / WhatsApp: +62 811-2345-6789 | Email: layanan@sukamaju.desa.id
-- Syarat KTP-EL:
-  * Baru: Usia 17 tahun, Fotokopi Kartu Keluarga (KK). Tanpa surat pengantar RT/RW (Perpres No. 96 Tahun 2018).
-  * Rusak: Fisik KTP lama, Fotokopi KK.
-  * Hilang: Surat Keterangan Kehilangan dari Polsek setempat + Fotokopi KK.
-- Syarat Kartu Identitas Anak (KIA): Fotokopi Akta Lahir, KK orang tua, KTP orang tua, pasfoto 3x4 (untuk anak usia di atas 5 tahun).
-- Akta Kematian: Surat Kematian dari RS/Dokter/Kelurahan, KTP almarhum, KK, KTP 2 saksi.
-- Akta Perkawinan: Surat nikah keagamaan, KTP suami istri, KK, pasfoto berdampingan.
-- Surat Pindah (SKPWNI): KK asli, KTP pemohon, form permohonan pindah.
-- Jalur Khusus Fast-Track: Warga yang berkasnya lulus pra-pemeriksaan AI (skor minimal 75%) akan memperoleh Tiket QR Prioritas. Saat ke kantor kelurahan, cukup tunjukkan QR Tiket di loket tanpa perlu antre panjang manual atau mengisi form kertas lagi.
-- UU PDP Compliance: Seluruh foto dokumen kependudukan diproses hanya dalam memori server (RAM) dan langsung dihapus otomatis (auto-purge). Tidak ada foto yang disimpan di hard disk.
-
-Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf). Pisahkan tiap paragraf dengan satu baris kosong. Pakai **tebal** untuk istilah penting dan daftar "•" untuk rincian (maksimal 5 butir).`;
-
-      // Prioritas 1: global provider "nara-route" / "bynara" (https://router.bynara.id/v1)
-      if (isNaraRouteConfigured(naraApiKey) || isBynaraConfigured(naraApiKey)) {
-        try {
-          const reply = await chatCompletionViaNaraRoute({
-            apiKey: naraApiKey,
-            model:
-              ((req.body?.naraModel || req.body?.bynaraModel) as string) ||
-              process.env.NARA_ROUTE_MODEL ||
-              process.env.BYNARA_MODEL ||
-              undefined,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: message },
-            ],
-            temperature: 0.2,
-          });
-          if (reply) {
-            return res.json({ success: true, reply, source: "nara-route" });
-          }
-        } catch (naraErr: any) {
-          console.warn(`[FAQ] nara-route gagal, lanjut ke Gemini/offline: ${naraErr?.message || naraErr}`);
-        }
-      }
-
-      if (client) {
-        // Multi-model resilience: Prioritize gemini-3.6-flash as requested, with fallback model
-        const candidateModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
-
-        for (const modelName of candidateModels) {
-          try {
-            const response = await client.models.generateContent({
-              model: modelName,
-              contents: [
-                { text: systemPrompt },
-                { text: `Pertanyaan Warga: ${message}` },
-              ],
-            });
-
-            if (response && response.text && response.text.trim()) {
-              return res.json({ success: true, reply: response.text.trim(), source: modelName });
-            }
-          } catch (modelErr: any) {
-            // If 503 (high demand) or 429 (rate limit), log gentle warning and try fallback model
-            console.warn(`[Gemini FAQ] Model ${modelName} temporary issue (${modelErr?.status || modelErr?.code || 503}), trying next model...`);
-          }
-        }
-      }
-
-      // If no API key or all Gemini models hit 503 high-demand spike, deliver comprehensive offline answer
-      const offlineReply = getOfflineFaqAnswer(message);
-      return res.json({ success: true, reply: offlineReply, source: "knowledge-base" });
+      // Logika jawab satu sumber dengan produksi (api/_lib/faq.ts):
+      // KB offline instan → cache Redis 24 jam → Gemini → nara-route → KB generik.
+      const { reply, source } = await answerFaq(String(message), {
+        apiKey: extractNaraApiKey(req) || extractBynaraApiKey(req),
+        naraModel: ((req.body?.naraModel || req.body?.bynaraModel) as string) || undefined,
+      });
+      return res.json({ success: true, reply, source });
     } catch (err: any) {
       console.warn("Chat fallback activation:", err?.message || err);
       return res.json({
         success: true,
-        reply: "Halo Warga Sukamaju! Saya VeriBot siap membantu Anda. Untuk pengurusan dokumen kependudukan (KTP, KK, KIA), loket buka Senin-Kamis 08.00-15.30 WIB dan Jumat 08.00-14.30 WIB. Anda dapat langsung mengunggah foto berkas di formulir mandiri untuk mendapatkan Tiket Fast-Track!",
+        reply: FAQ_EMERGENCY_REPLY,
         source: "emergency-fallback",
       });
     }

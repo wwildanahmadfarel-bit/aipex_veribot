@@ -8,7 +8,7 @@
 // Alias lama (/api/eval/results, dst.) diarahkan lewat rewrite vercel.json.
 
 import { readJsonBody, setCors } from "./_lib/http.js";
-import { getSupabase } from "./_lib/store.js";
+import { JENIS_DOKUMEN_VALID, getSupabase } from "./_lib/store.js";
 import { officerUnauthorized, requireOfficer } from "./_lib/officer-auth.js";
 import { sha256Hex, validateUploadBuffer } from "./_lib/file-guard.js";
 import {
@@ -19,7 +19,7 @@ import {
   simpanFotoEval,
 } from "./_lib/eval-foto.js";
 
-const JENIS_OK = ["KTP", "KK", "AKTA", "LAINNYA"];
+const JENIS_OK: string[] = [...JENIS_DOKUMEN_VALID, "LAINNYA"];
 const STATUS_OK = ["BERHASIL", "BURAM", "TIDAK_VALID"];
 
 function resolveAction(req: any): string {
@@ -152,7 +152,7 @@ async function handleUpload(req: any, res: any) {
       return res.status(400).json({ success: false, message: "file_id wajib 3-32 char alfanumerik (mis. P001)." });
     }
     if (!JENIS_OK.includes(jenisTrue)) {
-      return res.status(400).json({ success: false, message: "jenis_true wajib salah satu: KTP/KK/AKTA/LAINNYA." });
+      return res.status(400).json({ success: false, message: `jenis_true wajib salah satu: ${JENIS_OK.join("/")}.` });
     }
     if (!STATUS_OK.includes(statusTrue)) {
       return res.status(400).json({ success: false, message: "status_true wajib salah satu: BERHASIL/BURAM/TIDAK_VALID." });

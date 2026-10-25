@@ -31,7 +31,7 @@ export interface Ticket {
   no_hp?: string;
   jenis_dokumen: string;
   skor_kejelasan: number;
-  status_verifikasi: 'BERHASIL' | 'BURAM' | 'TIDAK_VALID' | 'DISETUJUI' | 'DITOLAK' | 'PERLU_PERBAIKAN';
+  status_verifikasi: 'BERHASIL' | 'BURAM' | 'TIDAK_VALID' | 'DISETUJUI' | 'DITOLAK' | 'PERLU_PERBAIKAN' | 'PENDING' | 'MENUNGGU';
   catatan?: string;
   created_at: string;
   file_url?: string;
@@ -364,7 +364,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
   });
 
   // Count Metrics — sinkron dengan Header/App: PENDING juga dihitung perlu verifikasi.
-  const totalPending = tickets.filter(t => ['PENDING', 'BERHASIL', 'BURAM', 'REVISI', 'PERLU_PERBAIKAN'].includes(String(t.status_verifikasi || '').toUpperCase())).length;
+  const totalPending = tickets.filter(t => ['PENDING', 'MENUNGGU', 'BERHASIL', 'BURAM', 'REVISI', 'PERLU_PERBAIKAN'].includes(String(t.status_verifikasi || '').toUpperCase())).length;
   const totalApproved = tickets.filter(t => ['DISETUJUI', 'APPROVED'].includes(String(t.status_verifikasi || '').toUpperCase())).length;
   const totalRejected = tickets.filter(t => ['DITOLAK', 'REJECTED', 'TIDAK_VALID'].includes(String(t.status_verifikasi || '').toUpperCase())).length;
 
@@ -708,7 +708,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
 
           <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
             <Filter className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
-            {(['SEMUA', 'BERHASIL', 'DISETUJUI', 'DITOLAK', 'BURAM', 'PERLU_PERBAIKAN'] as const).map((status) => (
+            {(['SEMUA', 'PENDING', 'MENUNGGU', 'BERHASIL', 'DISETUJUI', 'DITOLAK', 'BURAM', 'PERLU_PERBAIKAN'] as const).map((status) => (
               <button
                 key={status}
                 type="button"
@@ -1062,6 +1062,7 @@ export default AdminDashboard;
 export function StatusBadge({ status }: { status: string }) {
   switch (status) {
     case 'DISETUJUI':
+    case 'APPROVED':
       return <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> DISETUJUI</span>;
     case 'DITOLAK':
     case 'TIDAK_VALID':
@@ -1072,6 +1073,9 @@ export function StatusBadge({ status }: { status: string }) {
       return <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><Clock className="w-3 h-3"/> SIAP VERIFIKASI</span>;
     case 'BURAM':
       return <span className="px-2.5 py-1 bg-amber-100 text-amber-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> BURAM</span>;
+    case 'PENDING':
+    case 'MENUNGGU':
+      return <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><Clock className="w-3 h-3"/> MENUNGGU</span>;
     default:
       return <span className="px-2.5 py-1 bg-slate-100 text-slate-600 font-bold rounded-lg text-[10px]">{status}</span>;
   }

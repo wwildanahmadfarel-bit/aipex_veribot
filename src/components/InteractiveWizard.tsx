@@ -4,9 +4,12 @@ import confetti from "canvas-confetti";
 import { Ticket, VerificationResult, PreScreenInitialData } from "../types";
 import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
 import { AipexLogo } from "./AipexLogo";
-import { jenisLabel } from "./OcrPreScreenCard";
+import { JENIS_NIK_OPSIONAL, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
 import { catalogServices } from "../data/servicesData";
 import { BLUR_SEVERITY_STYLE, blurAreaLabel, normalizeBlurAreas } from "../lib/blurAreas";
+import { buildScanRecommendations } from "../lib/recommendations";
+import { BUKAN_KTP_MESSAGE } from "../lib/messages";
+import { RecommendationCard } from "./RecommendationCard";
 import {
   clearDraft,
   loadDraft,
@@ -92,6 +95,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const draftSuppressedRef = useRef<boolean>(false);
   const draftSnapshotRef = useRef<Omit<WizardDraft, "id" | "updatedAt" | "expiresAt"> | null>(null);
   const saveNowRef = useRef<() => Promise<void>>(async () => {});
+  // Refs for file inputs to clear them after validation
+  const mainFileInputRef = useRef<HTMLInputElement>(null);
+  const supportFileInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Daftar berkas WAJIB mengikuti syarat layanan (badge WAJIB di katalog).
   // Sumber kebenaran tunggal: servicesData.ts — ubah di sana bila ketentuan berubah.
@@ -110,6 +116,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setSupportFiles([]);
     setCombinedPages([]);
     setUploadMode("individual");
+    setVerificationResult(null); // Clear stale scan result when service changes
   };
 
   // Step 3: AI Scanner & Verification
@@ -123,8 +130,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const [generatedTicket, setGeneratedTicket] = useState<Ticket | null>(null);
   // true = nomor WA ikut tersimpan di DB (prefill modal petugas otomatis).
   const [phoneSaved, setPhoneSaved] = useState<boolean | null>(null);
-  // Bukti yang sama untuk tiket hasil pindai (respons /api/scan-document).
-  const [scanPhoneSaved, setScanPhoneSaved] = useState<boolean | null>(null);
+  // Guard untuk mencegah double-submit saat menerbitkan tiket
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Update selectedService when initialService prop changes
@@ -149,6 +156,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       if (initialPreScreenData.imageBase64) {
         setDocImageBase64(initialPreScreenData.imageBase64);
         setDocImageName(initialPreScreenData.imageName || "e-KTP_Verifikasi_OCR.jpg");
+      }
+      // Prefill verification result but stay on Step 1 for WA/alamat input
+      // User must complete Step 1 & 2 validation before proceeding
+      if (initialPreScreenData.verificationResult) {
+        setVerificationResult(initialPreScreenData.verificationResult);
       }
     }
   }, [initialPreScreenData]);
@@ -354,7 +366,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       "Pencatatan resmi kematian warga dengan lampiran surat keterangan medis / RT.",
     "Akta Perkawinan":
       "Pencatatan perkawinan sipil non-Muslim setelah upacara keagamaan.",
-    "Surat Keterangan Pindah (SKPWNI)":
+    "Surat Pindah (SKPWNI)":
       "Pengajuan surat pindah domisili antar kelurahan, kecamatan, atau kota.",
     "Konsolidasi / Sinkronisasi NIK":
       "Sinkronisasi NIK yang belum aktif di BPJS, bank, atau sistem publik.",
@@ -367,6 +379,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     if (!file) return;
     if (file.size > MAX_FILE_MB * 1024 * 1024) {
       alert(`Ukuran file maksimal ${MAX_FILE_MB} MB. Kompres foto atau pilih file yang lebih kecil.`);
+      // Clear input so user can re-select same file
+      if (e.target) e.target.value = "";
       return;
     }
     setUploadMode("individual");
@@ -377,13 +391,18 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       setDocImageBase64(reader.result as string);
     };
     reader.readAsDataURL(file);
+    // Clear stale scan result when main document changes
+    setVerificationResult(null);
+    // Clear input so user can re-select same file if needed
+    if (e.target) e.target.value = "";
   };
 
   /** Unggah berkas pendukung wajib (slot mengikuti urutan syarat layanan). */
-  const handleSupportUpload = (slot: number, file: File | undefined) => {
+  const handleSupportUpload = (slot: number, file: File | undefined, inputEl?: HTMLInputElement) => {
     if (!file) return;
     if (file.size > MAX_FILE_MB * 1024 * 1024) {
       alert(`Ukuran file maksimal ${MAX_FILE_MB} MB. Kompres file atau pilih file yang lebih kecil.`);
+      if (inputEl) inputEl.value = "";
       return;
     }
     const reader = new FileReader();
@@ -395,6 +414,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       });
     };
     reader.readAsDataURL(file);
+    // Clear stale scan result when supporting documents change
+    setVerificationResult(null);
+    if (inputEl) inputEl.value = "";
   };
 
   const removeSupportFile = (slot: number) => {
@@ -435,6 +457,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       rest.map((p) => ({ base64: toDataUrl(p.base64, p.mimeType), name: p.fileName }))
     );
     setUploadMode("combined");
+    // Clear stale scan result when combined PDF changes
+    setVerificationResult(null);
   };
 
   const removeCombinedPdf = () => {
@@ -443,6 +467,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setDocImageName("");
     setSupportFiles([]);
     setUploadMode("combined");
+    setVerificationResult(null); // Clear stale scan result when PDF is removed
   };
 
   /** Judul syarat yang berkasnya BELUM diunggah (untuk pesan validasi). */
@@ -456,14 +481,29 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   };
 
   // Step 1 Validation — NIK 16 digit angka + WA format Indonesia.
+  // NIK OPSIONAL bila jenis dokumen sudah diketahui non-kartu dari pra-pemeriksaan
+  // (akta kematian/perkawinan & surat pindah lama sering tidak mencantumkan NIK).
+  const jenisPraPindai = normalizeJenis(
+    initialPreScreenData?.jenisDokumen || verificationResult?.jenis_dokumen || ""
+  );
+  // Layanan yang dokumennya memang non-kartu (akta kematian/perkawinan & surat
+  // pindah) → NIK opsional walau pra-pemeriksaan belum dijalankan.
+  const layananNonKartu = /akta kematian|akta perkawinan|surat pindah/i.test(selectedService);
+  const nikOpsional = JENIS_NIK_OPSIONAL.includes(jenisPraPindai) || layananNonKartu;
   const isValidWa = (v: string) => /^(08\d{8,12}|628\d{8,12}|\+628\d{8,12})$/.test(v.replace(/[\s-]/g, ""));
   const handleProceedToStep2 = () => {
-    if (!nik.trim() || !nama.trim() || !wa.trim()) {
-      alert("Mohon lengkapi NIK, Nama Lengkap, dan Nomor WhatsApp aktif Anda terlebih dahulu.");
+    if (!nama.trim() || !wa.trim() || (!nikOpsional && !nik.trim())) {
+      alert(
+        nikOpsional
+          ? "Mohon lengkapi Nama Lengkap dan Nomor WhatsApp aktif Anda terlebih dahulu (NIK opsional untuk dokumen ini)."
+          : "Mohon lengkapi NIK, Nama Lengkap, dan Nomor WhatsApp aktif Anda terlebih dahulu."
+      );
       return;
     }
-    if (!/^\d{16}$/.test(nik.trim())) {
-      alert("Nomor Induk Kependudukan (NIK) harus tepat 16 digit angka (tanpa huruf/spasi).");
+    if (nik.trim() && !/^\d{16}$/.test(nik.trim())) {
+      alert(
+        "NIK harus tepat 16 digit angka (tanpa huruf/spasi), atau biarkan kosong bila tidak tercantum pada dokumen."
+      );
       return;
     }
     if (!isValidWa(wa.trim())) {
@@ -483,6 +523,13 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       alert(
         `Berkas wajib belum lengkap (${missing.length}/${requiredDocs.length}). Yang belum diunggah:\n• ${missing.join("\n• ")}`
       );
+      return;
+    }
+    // If we already have a verification result from pre-screen, skip actual scan
+    // but still go to Step 3 to show the result (user has completed Step 1 & 2 validation)
+    if (verificationResult) {
+      setCurrentStep(3);
+      window.scrollTo({ top: 120, behavior: "smooth" });
       return;
     }
     // Anti-spam: cooldown lokal 30 detik antar-pindaian.
@@ -571,16 +618,6 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       clearInterval(interval);
       setScanProgress(100);
 
-      const BUKAN_KTP_MESSAGE =
-        "File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang jelas dan tidak terpotong.";
-      const normalizeJenis = (raw: unknown): string => {
-        const upper = String(raw ?? "").toUpperCase().trim();
-        if (!upper) return "LAINNYA";
-        if (upper.includes("KTP") || upper.includes("TANDA PENDUDUK")) return "KTP";
-        if (upper === "KK" || upper.includes("KARTU KELUARGA")) return "KK";
-        if (upper.includes("AKTA") || upper.includes("AKTE")) return "AKTA";
-        return "LAINNYA";
-      };
       const normalizeStatus = (raw: unknown): string => {
         const upper = String(raw ?? "").toUpperCase().trim().replace(/[\s-]+/g, "_");
         if (["BERHASIL", "VALID", "LULUS", "LAYAK", "SUCCESS"].includes(upper)) return "BERHASIL";
@@ -600,7 +637,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       if (jenisNorm === "LAINNYA") statusNorm = "TIDAK_VALID";
       const tidakValid =
         statusNorm === "TIDAK_VALID" || jenisNorm === "LAINNYA" || data?.success === false;
-      // Backend: TIDAK_VALID → success:false tanpa tiket; BURAM valid → success:true + tiket QR.
+      // Backend: TIDAK_VALID → success:false; dokumen valid (BERHASIL/BURAM) →
+      // success:true TANPA tiket — tiket dibuat di /api/tickets oleh wizard.
       const backendGagal = data?.success === false;
       const skorBackend =
         typeof parsed.skor_kejelasan === "number"
@@ -653,12 +691,6 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       }
 
       setVerificationResult(result);
-      // Bukti simpan nomor di tiket hasil pindai (untuk prefill modal petugas).
-      if (data && typeof (data as any).phoneSaved === "boolean") {
-        setScanPhoneSaved((data as any).phoneSaved);
-      } else {
-        setScanPhoneSaved(null);
-      }
       setIsScanning(false);
     } catch (err) {
       console.error(err);
@@ -667,8 +699,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       // JANGAN palsukan LULUS saat gagal; tampilkan pesan jujur (termasuk info limit).
       const rawMsg = err instanceof Error ? err.message : "";
       const catatan = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMsg)
-        ? "Gagal menghubungi server OCR. Periksa koneksi lalu unggah ulang foto e-KTP asli."
-        : rawMsg || "Gagal menghubungi server OCR. Periksa koneksi lalu unggah ulang foto e-KTP asli.";
+        ? "Gagal menghubungi server OCR. Periksa koneksi lalu ulangi pindaian dokumen."
+        : rawMsg || "Gagal menghubungi server OCR. Periksa koneksi lalu ulangi pindaian dokumen.";
       setVerificationResult({
         nik: nik,
         nama: nama,
@@ -685,6 +717,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   // Hanya file BUKAN kependudukan (LAINNYA) yang diblokir (frontend + backend ganda).
   // Gangguan jaringan dibedakan pesannya agar tak disangka "bukan KTP".
   const handleGenerateTicket = async () => {
+    if (isSubmitting) return;
     const catatan = verificationResult?.catatan || "";
     // Gangguan sistem/kunci AI juga diblokir seperti gangguan jaringan.
     const isNetworkError =
@@ -700,11 +733,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       verificationResult.jenis_dokumen === "LAINNYA" ||
       /bukan kartu kependudukan/i.test(catatan);
     if (bukanKtp) {
-      alert(
-        "File bukan Kartu Kependudukan Indonesia. Tiket/QR tidak dapat diterbitkan. Silakan unggah ulang foto e-KTP asli."
-      );
+      alert(`${BUKAN_KTP_MESSAGE} Tiket/QR tidak dapat diterbitkan.`);
       return;
     }
+    setIsSubmitting(true);
     try {
       // Petakan hasil scan ke status backend: LULUS→BERHASIL, GAGAL+valid→BURAM, GAGAL+LAINNYA→TIDAK_VALID
       const scanStatus =
@@ -770,6 +802,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       }
     } catch (err: any) {
       alert("Terjadi kesalahan jaringan saat menerbitkan tiket.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1062,7 +1096,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     <option value="Aktivasi Identitas Digital (IKD)">Aktivasi Identitas Digital (IKD)</option>
                     <option value="Akta Kematian">Akta Kematian</option>
                     <option value="Akta Perkawinan">Akta Perkawinan</option>
-                    <option value="Surat Keterangan Pindah (SKPWNI)">Surat Keterangan Pindah (SKPWNI)</option>
+                    <option value="Surat Pindah (SKPWNI)">Surat Pindah (SKPWNI)</option>
                     <option value="Konsolidasi / Sinkronisasi NIK">Konsolidasi / Sinkronisasi NIK</option>
                     <option value="Surat Keterangan Usaha (SKU)">Surat Keterangan Usaha (SKU)</option>
                   </select>
@@ -1081,7 +1115,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
-                      NOMOR INDUK KEPENDUDUKAN (NIK) *
+                      {nikOpsional
+                        ? "NOMOR INDUK KEPENDUDUKAN (NIK) — OPSIONAL"
+                        : "NOMOR INDUK KEPENDUDUKAN (NIK) *"}
                     </label>
                     <span
                       className={`font-code-num text-xs font-semibold ${
@@ -1100,11 +1136,15 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       maxLength={16}
                       value={nik}
                       onChange={(e) => setNik(e.target.value.replace(/\D/g, ""))}
-                      placeholder="16 digit angka (contoh: 320101...)"
+                      placeholder={nikOpsional ? "16 digit angka (kosongkan bila tidak tercantum)" : "16 digit angka (contoh: 320101...)"}
                       className="w-full h-12 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 font-code-num text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition-all outline-none"
                     />
                   </div>
-                  <span className="text-[11px] text-slate-500">Standar Ditjen Dukcapil Kemendagri</span>
+                  <span className="text-[11px] text-slate-500">
+                    {nikOpsional
+                      ? "NIK opsional untuk akta kematian/perkawinan & surat pindah — kosongkan bila tidak tercantum."
+                      : "Standar Ditjen Dukcapil Kemendagri"}
+                  </span>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
@@ -1388,7 +1428,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <input
                     type="file"
                     accept="image/*,application/pdf,.pdf"
-                    onChange={handleFileUpload}
+                    onChange={(e) => handleFileUpload(e)}
+                    ref={mainFileInputRef}
                     className="hidden"
                   />
                 </label>
@@ -1422,7 +1463,12 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       <span className="text-xs text-emerald-700 font-semibold hidden sm:inline">Terunggah</span>
                       <label className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-[#0F172A] text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
                         Ganti
-                        <input type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
+                        <input
+                          type="file"
+                          accept="image/*,application/pdf,.pdf"
+                          className="hidden"
+                          onChange={(e) => handleSupportUpload(i, e.target.files?.[0], e.currentTarget)}
+                        />
                       </label>
                       <button type="button" onClick={() => removeSupportFile(i)} className="px-3 py-1.5 rounded-lg bg-white border border-red-200 hover:bg-red-50 text-red-700 text-xs font-semibold cursor-pointer shrink-0">
                         Hapus
@@ -1437,7 +1483,12 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                         <span className="block text-xs font-bold text-[#0F172A]">Klik untuk unggah {req.title}</span>
                         <span className="block text-[11px] text-slate-500 mt-0.5">Format: JPG, PNG, WEBP, atau PDF (Maksimal 4MB)</span>
                       </span>
-                      <input type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={(e) => handleSupportUpload(i, e.target.files?.[0])} />
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf,.pdf"
+                        className="hidden"
+                        onChange={(e) => handleSupportUpload(i, e.target.files?.[0], e.currentTarget)}
+                      />
                     </label>
                   )}
                 </div>
@@ -1455,7 +1506,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 <strong>Jaminan Kepatuhan UU No. 27/2022 (UU PDP):</strong> Foto yang Anda
                 unggah disimpan sementara terenkripsi dan hanya terlihat petugas serta Anda sendiri,
                 lalu dihapus otomatis (purge) seketika tiket disetujui/ditolak. Yang tercatat permanen
-                hanya jenis dokumen (KTP/KK/AKTA) untuk rekap.
+                hanya jenis dokumen kependudukan untuk rekap.
               </div>
             </div>
 
@@ -1581,10 +1632,12 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                             verificationResult.jenis_dokumen === "KTP"
                               ? "bg-blue-100 text-blue-800 border-blue-200"
-                              : "bg-white text-slate-600 border-slate-200"
+                              : verificationResult.jenis_dokumen === "LAINNYA"
+                                ? "bg-red-100 text-red-700 border-red-200"
+                                : "bg-white text-slate-600 border-slate-200"
                           }`}
                         >
-                          Jenis Dokumen: {verificationResult.jenis_dokumen}
+                          Jenis Dokumen: {jenisLabel(verificationResult.jenis_dokumen)}
                         </span>
                       </div>
                       <p className="text-xs mt-1 leading-relaxed max-w-xl">
@@ -1600,22 +1653,40 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     </span>
                     <span
                       className={`font-code-num text-2xl font-extrabold ${
-                        verificationResult.skor >= 75 ? "text-emerald-600" : bukanKtp ? "text-red-500" : "text-amber-500"
+                        verificationResult.skor >= 70 ? "text-emerald-600" : bukanKtp ? "text-red-500" : "text-amber-500"
                       }`}
                     >
                       {verificationResult.skor}%
                     </span>
                     <span className="text-[10px] text-slate-500 font-medium">
-                      {verificationResult.skor >= 75 ? "≥ 75% Fast-Track" : "< 75% Butuh Revisi"}
+                      {verificationResult.skor >= 70 ? "≥ 70% Lulus Uji Kejelasan" : "< 70% Butuh Perbaikan"}
                     </span>
-                    {scanPhoneSaved !== null && (
-                      <span className={`text-[10px] font-semibold mt-1 ${scanPhoneSaved ? 'text-emerald-600' : 'text-amber-600'}`}>
-                        {scanPhoneSaved ? 'Nomor WA tersimpan ✓' : 'Nomor WA tak tersimpan'}
-                      </span>
-                    )}
                   </div>
                 </div>
                   );
+                })()}
+
+                {/* REKOMENDASI PERBAIKAN & TINDAK LANJUT — dihitung di klien dari
+                    sinyal hasil pindai, tetap tampil walau AI sedang gangguan. */}
+                {(() => {
+                  const bukanKtp =
+                    verificationResult.jenis_dokumen === "LAINNYA" ||
+                    /bukan kartu kependudukan/i.test(verificationResult.catatan || "");
+                  const lulus = verificationResult.status_kualitas === "LULUS" && !bukanKtp;
+                  const sysErr =
+                    !lulus &&
+                    !bukanKtp &&
+                    /gagal menghubungi|koneksi|jaringan|gangguan sistem|sedang gangguan|kunci akses|sedang sibuk|petugas loket/i.test(
+                      verificationResult.catatan || ""
+                    );
+                  const { perbaikan, tindakLanjut } = buildScanRecommendations({
+                    jenis_dokumen: verificationResult.jenis_dokumen,
+                    skor: verificationResult.skor,
+                    blur_areas: verificationResult.blur_areas,
+                    is_system_error: sysErr,
+                    lulus,
+                  });
+                  return <RecommendationCard perbaikan={perbaikan} tindakLanjut={tindakLanjut} />;
                 })()}
 
                 {/* Peta Area Kurang Jelas — overlay bbox di atas pratinjau foto */}
@@ -1729,26 +1800,49 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <div className="divide-y divide-slate-100 text-xs">
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Nomor Induk Kependudukan (NIK)</span>
-                      <span className="font-code-num font-semibold text-[#0F172A]">{verificationResult.nik}</span>
-                      <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[15px]">check_circle</span>
-                        <span>16 Digit Valid & Cocok</span>
-                      </span>
+                      <span className="font-code-num font-semibold text-[#0F172A]">{verificationResult.nik || "—"}</span>
+                      {nikOpsional && !nik.trim() ? (
+                        <span className="font-semibold flex items-center gap-1 text-slate-500">
+                          <span className="material-symbols-outlined text-[15px]">info</span>
+                          <span>NIK opsional — tidak wajib untuk dokumen ini</span>
+                        </span>
+                      ) : (
+                        <span className={`font-semibold flex items-center gap-1 ${verificationResult.nik && verificationResult.nik === nik && verificationResult.nik.length === 16 ? "text-emerald-600" : "text-red-500"}`}>
+                          <span className="material-symbols-outlined text-[15px]">
+                            {verificationResult.nik && verificationResult.nik === nik && verificationResult.nik.length === 16 ? "check_circle" : "cancel"}
+                          </span>
+                          <span>
+                            {verificationResult.nik && verificationResult.nik === nik && verificationResult.nik.length === 16
+                              ? "16 Digit Valid & Cocok"
+                              : verificationResult.nik && verificationResult.nik.length === 16
+                                ? "NIK Tidak Cocok dengan Formulir"
+                                : "NIK Belum Terextrakt / Tidak Valid"}
+                          </span>
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Nama Pemohon</span>
-                      <span className="font-semibold text-[#0F172A]">{verificationResult.nama}</span>
-                      <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[15px]">check_circle</span>
-                        <span>Sesuai Identitas</span>
+                      <span className="font-semibold text-[#0F172A]">{verificationResult.nama || "—"}</span>
+                      <span className={`font-semibold flex items-center gap-1 ${verificationResult.nama && verificationResult.nama.toLowerCase().trim() === nama.toLowerCase().trim() && verificationResult.nama.length > 0 ? "text-emerald-600" : "text-red-500"}`}>
+                        <span className="material-symbols-outlined text-[15px]">
+                          {verificationResult.nama && verificationResult.nama.toLowerCase().trim() === nama.toLowerCase().trim() && verificationResult.nama.length > 0 ? "check_circle" : "cancel"}
+                        </span>
+                        <span>
+                          {verificationResult.nama && verificationResult.nama.toLowerCase().trim() === nama.toLowerCase().trim() && verificationResult.nama.length > 0
+                            ? "Sesuai Identitas"
+                            : verificationResult.nama && verificationResult.nama.length > 0
+                              ? "Nama Tidak Cocok dengan Formulir"
+                              : "Nama Belum Terextrakt"}
+                        </span>
                       </span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Jenis Urusan / Berkas</span>
                       <span className="text-[#0F172A]">
-                        {verificationResult.jenis_dokumen}
+                        {jenisLabel(verificationResult.jenis_dokumen)}
                         <span className="text-slate-400"> • {selectedService}</span>
                       </span>
                       <span
@@ -1797,27 +1891,32 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   !verificationResult ||
                   verificationResult.jenis_dokumen === "LAINNYA" ||
                   /bukan kartu kependudukan/i.test(catatanBawah);
+                const isDisabled = terblokir || isSubmitting;
                 return (
                   <div className="w-full sm:w-auto flex flex-col items-stretch gap-1.5">
                     <button
                       type="button"
                       onClick={handleGenerateTicket}
-                      disabled={terblokir}
+                      disabled={isDisabled}
                       title={
-                        terblokir
+                        isSubmitting
+                          ? "Sedang memproses..."
+                          : terblokir
                           ? networkBawah
                             ? "Koneksi OCR gagal — ulangi pindaian dahulu"
                             : "File bukan dokumen kependudukan — tiket tidak dapat diterbitkan"
                           : "Terbitkan tiket QR"
                       }
                       className={`w-full sm:w-auto px-6 py-3 rounded-xl font-semibold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 ${
-                        terblokir
+                        isDisabled
                           ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                           : "bg-[#2563eb] hover:bg-blue-700 text-white cursor-pointer"
                       }`}
                     >
                       <span>
-                        {terblokir
+                        {isSubmitting
+                          ? "Memproses..."
+                          : terblokir
                           ? networkBawah
                             ? "Koneksi Gagal — Ulangi Pindaian"
                             : "Tiket Diblokir — Bukan Dokumen Kependudukan"
@@ -1842,8 +1941,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
         {/* STEP 4: TIKET QR CODE FAST-TRACK */}
         {currentStep === 4 && generatedTicket && (
           <div className="flex flex-col items-center gap-6 animate-in fade-in duration-300">
+            {/* Cetak hanya kartu tiket — sisanya disembunyikan saat print. */}
+            <style>{`@media print { body * { visibility: hidden !important; } #wizardTicketPrintCard, #wizardTicketPrintCard * { visibility: visible !important; } #wizardTicketPrintCard { position: absolute !important; left: 0; top: 0; width: 100% !important; max-width: 100% !important; border-radius: 0 !important; box-shadow: none !important; } #wizardTicketPrintCard .no-print { display: none !important; } }`}</style>
             {/* Voucher Card Container */}
-            <div className="w-full max-w-lg bg-gradient-to-b from-blue-700 to-[#1e3a8a] text-white rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden border border-blue-400/30">
+            <div id="wizardTicketPrintCard" className="w-full max-w-lg bg-gradient-to-b from-blue-700 to-[#1e3a8a] text-white rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden border border-blue-400/30">
               <div className="absolute -right-12 -top-12 w-44 h-44 rounded-full bg-white/10 blur-2xl"></div>
 
               {/* Card Top Title */}
@@ -1895,8 +1996,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-blue-200">Skor AI Pre-Screening:</span>
-                  <span className="font-code-num text-emerald-300 font-bold">
-                    {generatedTicket.skor_ai}% (Lulus Verifikasi)
+                  <span className={`font-code-num font-bold ${generatedTicket.skor_ai >= 70 ? "text-emerald-300" : "text-amber-300"}`}>
+                    {generatedTicket.skor_ai}% {generatedTicket.skor_ai >= 70 ? "(Lulus Uji Kejelasan)" : "(Verifikasi Ulang di Loket)"}
                   </span>
                 </div>
                 <div className="flex justify-between">

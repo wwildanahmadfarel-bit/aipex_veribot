@@ -144,11 +144,14 @@ export default function App() {
             nama_warga: row.nama || "Warga",
             jenis_dokumen: row.jenis_dokumen || "KTP",
             status_verifikasi:
+              // BERHASIL = menunggu verifikasi petugas (bukan disetujui).
               row.status_verifikasi === "BERHASIL"
-                ? "APPROVED"
+                ? "MENUNGGU"
                 : row.status_verifikasi === "BURAM" || row.status_verifikasi === "TIDAK_VALID"
                 ? "REVISI"
-                : row.status_verifikasi || "PENDING",
+                : row.status_verifikasi === "MENUNGGU"
+                  ? "MENUNGGU"
+                  : row.status_verifikasi || "PENDING",
             skor_ai: row.skor_kejelasan || 88,
             status_ai:
               row.status_verifikasi === "BERHASIL" || (row.skor_kejelasan >= 70) ? "LULUS" : "GAGAL",
@@ -174,8 +177,11 @@ export default function App() {
     fetchTickets();
   }, []);
 
-  // Open Wizard for a specific service
+  // Open Wizard for a specific service. Selalu mulai sesi baru: buang hasil
+  // pra-pemeriksaan lama agar tidak ter-prefill tanpa sadar. (Jalur dari kartu
+  // pre-screen memakai handleProceedFromPreScreen yang MENYETEL data ini.)
   const handleOpenWizard = (serviceName?: string) => {
+    setPreScreenData(null);
     if (serviceName) {
       setSelectedService(serviceName);
     }
@@ -234,7 +240,7 @@ export default function App() {
 
   // Sinkron dengan AdminDashboard: semua yang butuh verifikasi petugas.
   const pendingCount = tickets.filter((t) =>
-    ["PENDING", "BERHASIL", "BURAM", "REVISI", "PERLU_PERBAIKAN"].includes(String(t.status_verifikasi || "").toUpperCase())
+    ["PENDING", "MENUNGGU", "BERHASIL", "BURAM", "REVISI", "PERLU_PERBAIKAN"].includes(String(t.status_verifikasi || "").toUpperCase())
   ).length;
 
   return (

@@ -45,3 +45,13 @@ h1, h2, h3, .font-heading {
   font-family: 'Plus Jakarta Sans', sans-serif;
 }
 
+/* Sembunyikan scrollbar chips vertikal/horizontal (lintas browser) */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+

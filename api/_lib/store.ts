@@ -10,8 +10,10 @@ import {
   isNaraRouteConfigured,
 } from "../../services/ai_providers.js";
 
+// Frasa "bukan Kartu Kependudukan" dipertahankan: dipakai deteksi regex
+// di frontend/backend (mis. /bukan kartu kependudukan/i).
 export const BUKAN_KTP_MESSAGE =
-  "File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang jelas dan tidak terpotong.";
+  "File bukan Kartu Kependudukan Indonesia. Verifikasi AI mendukung e-KTP, Kartu Keluarga (KK), Kartu Identitas Anak (KIA), Akta Kelahiran/Kematian/Perkawinan, dan Surat Pindah (SKPWNI) asli — silakan unggah ulang foto dokumen yang jelas dan tidak terpotong.";
 
 export function normalizeAccessCode(raw: unknown): string {
   if (typeof raw !== "string") return "";
@@ -35,9 +37,51 @@ export function findFallbackOfficer(normalized: string) {
   return FALLBACK_OFFICERS.find((o) => normalizeAccessCode(o.kode_akses) === normalized) || null;
 }
 
-export function normalizeJenisDokumen(raw: unknown): "KTP" | "KK" | "AKTA" | "LAINNYA" {
+export type JenisDokumen =
+  | "KTP"
+  | "KK"
+  | "AKTA"
+  | "AKTA_KEMATIAN"
+  | "AKTA_PERKAWINAN"
+  | "SURAT_PINDAH"
+  | "KIA"
+  | "LAINNYA";
+
+/** Jenis dokumen kependudukan yang didukung verifikasi AI (tanpa LAINNYA). */
+export const JENIS_DOKUMEN_VALID: readonly JenisDokumen[] = [
+  "KTP",
+  "KK",
+  "AKTA",
+  "AKTA_KEMATIAN",
+  "AKTA_PERKAWINAN",
+  "SURAT_PINDAH",
+  "KIA",
+];
+
+/** Dokumen non-kartu: NIK 16 digit OPSIONAL (dokumen lama sering tanpa NIK). */
+export const JENIS_NIK_OPSIONAL: readonly string[] = [
+  "AKTA_KEMATIAN",
+  "AKTA_PERKAWINAN",
+  "SURAT_PINDAH",
+];
+
+// Normalisasi jenis dokumen hasil AI. PENTING: jenis akta spesifik dicek
+// SEBELUM kata generik "AKTA" agar "Akta Kematian/Perkawinan" tidak tertelan
+// menjadi "AKTA" (Akta Kelahiran).
+export function normalizeJenisDokumen(raw: unknown): JenisDokumen {
   const upper = String(raw ?? "").toUpperCase().trim();
   if (!upper) return "LAINNYA";
+  if (upper.includes("KEMATIAN") || upper.includes("DEATH")) return "AKTA_KEMATIAN";
+  if (
+    upper.includes("PERKAWINAN") ||
+    upper.includes("KAWIN") ||
+    upper.includes("NIKAH") ||
+    upper.includes("MARRIAGE")
+  )
+    return "AKTA_PERKAWINAN";
+  if (upper.includes("PINDAH") || upper.includes("SKPWNI")) return "SURAT_PINDAH";
+  if (upper === "KIA" || /^KIA[\s_-]/.test(upper) || upper.includes("IDENTITAS ANAK") || upper.includes("KARTU ANAK"))
+    return "KIA";
   if (upper.includes("KTP") || upper.includes("TANDA PENDUDUK")) return "KTP";
   if (
     upper === "KK" ||
@@ -47,9 +91,8 @@ export function normalizeJenisDokumen(raw: unknown): "KTP" | "KK" | "AKTA" | "LA
     upper.includes("FAMILY CARD")
   )
     return "KK";
-  if (upper.includes("AKTA") || upper.includes("AKTE") || upper.includes("KELAHIRAN"))
+  if (upper.includes("AKTA") || upper.includes("AKTE") || upper.includes("KELAHIRAN") || upper.includes("BIRTH CERTIFICATE"))
     return "AKTA";
-  if (upper === "KTP" || upper === "KK" || upper === "AKTA") return upper as any;
   return "LAINNYA";
 }
 
@@ -204,18 +247,22 @@ export function toPublicTicket(row: any): any {
     ticket_code: row.kode_tiket || row.ticket_code,
     kode_tiket: row.kode_tiket || row.ticket_code,
     nik_encrypted: maskNik(rawNik),
-    nik_raw: rawNik,
+    // nik_raw removed for privacy (UU PDP)
     nama_warga: row.nama || row.nama_warga || "Warga",
     nama: row.nama || row.nama_warga || "Warga",
-    phone: row.phone || "",
-    alamat: row.alamat || "",
+    // phone and alamat removed from public list for privacy
     jenis_dokumen: row.jenis_dokumen || "KTP",
     status_verifikasi:
+      // BERHASIL = lolos uji kejelasan AI, MASIH menunggu verifikasi petugas
+      // (admin menampilkannya sebagai SIAP VERIFIKASI). Jangan tampilkan
+      // "Disetujui/Siap Cetak" ke publik sebelum petugas benar-benar memutuskan.
       row.status_verifikasi === "BERHASIL"
-        ? "APPROVED"
+        ? "MENUNGGU"
         : row.status_verifikasi === "BURAM"
           ? "REVISI"
-          : row.status_verifikasi || "PENDING",
+          : row.status_verifikasi === "PENDING"
+            ? "MENUNGGU"
+            : row.status_verifikasi || "PENDING",
     skor_ai: row.skor_kejelasan ?? row.skor_ai ?? 90,
     skor_kejelasan: row.skor_kejelasan ?? row.skor_ai ?? 90,
     status_ai:

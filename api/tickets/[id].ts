@@ -1,8 +1,9 @@
 import { readJsonBody, setCors } from "../_lib/http.js";
 import { getSupabase, memTickets, toPublicTicket } from "../_lib/store.js";
+import { officerUnauthorized, requireOfficer } from "../_lib/officer-auth.js";
 
-// GET /api/tickets/:kode → lacak tiket per kode
-// PATCH /api/tickets/:id → update status (fallback OfficerDashboard lama)
+// GET /api/tickets/:kode → lacak tiket per kode (publik)
+// PATCH /api/tickets/:id → update status (fallback OfficerDashboard lama, WAJIB Bearer petugas)
 export default async function handler(req: any, res: any) {
   if (setCors(req, res)) return;
   const supabase = getSupabase();
@@ -31,13 +32,9 @@ export default async function handler(req: any, res: any) {
           (t) => t.ticket_code.toUpperCase() === id || (t as any).kode_tiket?.toUpperCase() === id
         );
         if (mem) {
-          const found = {
-            ...mem,
-            kode_tiket: mem.ticket_code,
-            nama: mem.nama_warga,
-            skor_kejelasan: mem.skor_ai,
-            catatan: mem.catatan_ai,
-          };
+          // Masking + peta status publik yang sama dengan jalur Supabase (UU PDP):
+          // nik_raw/phone/alamat TIDAK boleh ikut keluar.
+          const found = toPublicTicket(mem);
           return res.json({ success: true, data: found, ticket: found });
         }
       }
@@ -51,6 +48,10 @@ export default async function handler(req: any, res: any) {
   }
 
   if (req.method === "PATCH") {
+    // Jalur publik DIKUNCI: perubahan status hanya via sesi petugas (Bearer).
+    // Dashboard admin memakai /api/admin/tickets (audit + notifikasi WA).
+    const auth = requireOfficer(req);
+    if (!auth.ok) return officerUnauthorized(res, auth.error);
     try {
       const body = await readJsonBody(req);
       const { status_verifikasi, catatan_petugas } = body;

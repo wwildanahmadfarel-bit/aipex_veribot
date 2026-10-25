@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { PrescreeningResult } from "../types";
 import { buildTicketQrText } from "../lib/ticketQr";
+import { BUKAN_KTP_MESSAGE } from "../lib/messages";
+import { JENIS_DOKUMEN_VALID, isNikWajib, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
 import {
   PAGE_STARTED_AT,
   QUOTA_MAX,
@@ -55,24 +57,6 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
   const [fileName, setFileName] = useState<string | null>(null);
   const [manualNik, setManualNik] = useState<string>("");
 
-  const BUKAN_KTP_MESSAGE =
-    "File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang jelas dan tidak terpotong.";
-
-  const normalizeJenis = (raw: unknown): string => {
-    const upper = String(raw ?? "").toUpperCase().trim();
-    if (!upper) return "LAINNYA";
-    if (upper.includes("KTP") || upper.includes("TANDA PENDUDUK")) return "KTP";
-    if (
-      upper === "KK" ||
-      upper.startsWith("KK ") ||
-      upper.startsWith("KK-") ||
-      upper.includes("KARTU KELUARGA")
-    )
-      return "KK";
-    if (upper.includes("AKTA") || upper.includes("AKTE")) return "AKTA";
-    return "LAINNYA";
-  };
-
   const normalizeStatus = (raw: unknown): string => {
     const upper = String(raw ?? "").toUpperCase().trim().replace(/[\s-]+/g, "_");
     if (["BERHASIL", "VALID", "LULUS", "LAYAK", "SUCCESS"].includes(upper)) return "BERHASIL";
@@ -101,7 +85,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
   // Hanya TIDAK_VALID / LAINNYA yang tidak dapat QR.
   const isValidDocResult = (r: any): boolean => {
     if (!r || isTidakValidResult(r)) return false;
-    return ["KTP", "KK", "AKTA"].includes(normalizeJenis(r.jenis_dokumen));
+    return (JENIS_DOKUMEN_VALID as readonly string[]).includes(normalizeJenis(r.jenis_dokumen));
   };
 
   const isBuramValidResult = (r: any): boolean => {
@@ -205,7 +189,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
       const buramValid =
         !tidakValid &&
         !berhasil &&
-        ["KTP", "KK", "AKTA"].includes(ocrData.jenis_dokumen as string);
+        (JENIS_DOKUMEN_VALID as readonly string[]).includes(ocrData.jenis_dokumen as string);
       const validDoc = berhasil || buramValid;
       ocrData.status_kualitas = berhasil ? "LAYAK" : "TIDAK_LAYAK";
       if (tidakValid && !/bukan kartu kependudukan/i.test(String(ocrData.catatan || ""))) {
@@ -311,7 +295,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
   const applyManualNik = () => {
     const clean = manualNik.replace(/\D/g, "");
     if (clean.length !== 16) {
-      setError("NIK manual harus tepat 16 digit angka sesuai fisik e-KTP.");
+      setError("NIK manual harus tepat 16 digit angka sesuai fisik dokumen.");
       return;
     }
     if (!scanResult || isTidakValidResult(scanResult)) return;
@@ -366,7 +350,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
         >
           <Upload className="w-8 h-8 text-blue-600 mb-2 transition-transform hover:scale-110" />
           <span className="text-xs font-semibold text-slate-700 text-center">
-            {fileName ? `File: ${fileName}` : "Klik atau Drag File e-KTP / KK Di Sini"}
+            {fileName ? `File: ${fileName}` : "Klik atau Drag Foto Dokumen Kependudukan Di Sini"}
           </span>
           <span className="text-[10px] text-slate-400 mt-1">Format JPG, PNG, WEBP, PDF (Maks 10MB)</span>
           <span className="text-[10px] font-mono text-slate-400 mt-0.5">
@@ -404,7 +388,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
             const layak = isLayakResult(scanResult);
             const buramValid = isBuramValidResult(scanResult);
             const validDoc = isValidDocResult(scanResult);
-            const jenisLabel = normalizeJenis(scanResult.jenis_dokumen);
+            const jenisKode = normalizeJenis(scanResult.jenis_dokumen);
             return (
               <div
                 className={`mt-4 p-4 rounded-xl space-y-3 animate-in fade-in-50 duration-200 border ${
@@ -419,8 +403,8 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                   <div className="p-3 bg-red-500 text-white text-xs font-semibold rounded-xl flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>
-                      File bukan Kartu Kependudukan Indonesia. Silakan unggah foto e-KTP asli yang
-                      jelas dan tidak terpotong.
+                      File bukan Kartu Kependudukan Indonesia. Silakan unggah foto dokumen kependudukan asli
+                      (e-KTP, KK, KIA, akta, atau surat pindah) yang jelas dan tidak terpotong.
                     </span>
                   </div>
                 )}
@@ -458,16 +442,16 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                   <span className="text-xs font-medium text-slate-500">Jenis Dokumen:</span>
                   <span
                     className={`text-xs font-bold px-2.5 py-1 rounded-full border ${
-                      jenisLabel === "KTP"
+                      jenisKode === "KTP"
                         ? "bg-blue-100 text-blue-800 border-blue-200"
-                        : jenisLabel === "LAINNYA"
+                        : jenisKode === "LAINNYA"
                           ? "bg-red-100 text-red-700 border-red-200"
                           : "bg-slate-100 text-slate-700 border-slate-200"
                     }`}
                   >
-                    {jenisLabel === "KTP"
+                    {jenisKode === "KTP"
                       ? "🪪 Jenis Dokumen: KTP"
-                      : `Jenis Dokumen: ${jenisLabel}`}
+                      : `Jenis Dokumen: ${jenisLabel(jenisKode)}`}
                   </span>
                 </div>
 
@@ -486,7 +470,9 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                       {scanResult.nik ||
                         (scanResult.nik_partial
                           ? `${scanResult.nik_partial} (sebagian)`
-                          : "Tidak Terbaca")}
+                          : !isNikWajib(jenisKode)
+                            ? "Opsional (tidak tercantum)"
+                            : "Tidak Terbaca")}
                     </p>
                     {!scanResult.nik && scanResult.nik_partial && (
                       <p className="text-[10px] text-amber-500 mt-0.5">
@@ -515,11 +501,11 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                   </p>
                 )}
 
-                {/* Koreksi NIK manual — khusus dokumen VALID yang NIK-nya tak terbaca AI */}
-                {validDoc && !scanResult.nik && (
+                {/* Koreksi NIK manual — khusus dokumen VALID yang NIK-nya wajib & tak terbaca AI */}
+                {validDoc && !scanResult.nik && isNikWajib(jenisKode) && (
                   <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3 space-y-2">
                     <p className="text-[11px] text-blue-900 font-semibold">
-                      Jenis dokumen sudah benar ({jenisLabel}) tapi NIK tidak terbaca. Ketik 16 digit NIK dari fisik {jenisLabel} untuk melengkapi QR:
+                      Jenis dokumen sudah benar ({jenisLabel(jenisKode)}) tapi NIK tidak terbaca. Ketik 16 digit NIK dari fisik dokumen untuk melengkapi QR:
                     </p>
                     <div className="flex gap-2">
                       <input
@@ -562,7 +548,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                   ) : tidakValid ? (
                     <label className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer">
                       <RefreshCw className="w-4 h-4" />
-                      <span>Unggah Ulang Foto e-KTP Asli</span>
+                      <span>Unggah Ulang Foto Dokumen Asli</span>
                       <input
                         type="file"
                         onChange={handleFileUpload}

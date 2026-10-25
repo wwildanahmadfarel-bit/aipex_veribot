@@ -2,6 +2,8 @@ import React, { useEffect, useRef } from "react";
 import QRCode from "qrcode";
 import { Ticket } from "../types";
 import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
+import { buildTicketFollowUp } from "../lib/recommendations";
+import { RecommendationCard } from "./RecommendationCard";
 
 interface TicketStatusModalProps {
   ticket: Ticket | null;
@@ -33,11 +35,12 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
 
   // Normalisasi status dari semua sumber: frontend (APPROVED/PENDING/REVISI)
   // + backend admin (BERHASIL/BURAM/DISETUJUI/DITOLAK/PERLU_PERBAIKAN).
+  // + public API (MENUNGGU for PENDING).
   const rawStatus = String(ticket.status_verifikasi || "").toUpperCase().trim();
   const isApproved =
     rawStatus === "APPROVED" || rawStatus === "DISETUJUI" || rawStatus === "BERHASIL";
   const isPending =
-    rawStatus === "PENDING" || rawStatus === "BERHASIL";
+    rawStatus === "PENDING" || rawStatus === "MENUNGGU" || rawStatus === "BERHASIL";
   const isRevisi =
     rawStatus === "REVISI" || rawStatus === "BURAM" || rawStatus === "PERLU_PERBAIKAN";
   const isRejected = rawStatus === "REJECTED" || rawStatus === "DITOLAK" || rawStatus === "TIDAK_VALID";
@@ -48,7 +51,10 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E293B]/70 backdrop-blur-xs p-4 animate-in fade-in duration-200"
       onClick={onClose}
     >
+      {/* Cetak Resi: hanya kartu status yang tampil di kertas. */}
+      <style>{`@media print { body * { visibility: hidden !important; } #ticketStatusPrintCard, #ticketStatusPrintCard * { visibility: visible !important; } #ticketStatusPrintCard { position: absolute !important; left: 0; top: 0; width: 100% !important; max-width: 100% !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; } #ticketStatusPrintCard .no-print { display: none !important; } }`}</style>
       <div
+        id="ticketStatusPrintCard"
         className="bg-white max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100"
         onClick={(e) => e.stopPropagation()}
       >
@@ -114,6 +120,14 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
             </div>
           </div>
 
+          {/* Tindak lanjut kontekstual sesuai status tiket. */}
+          {(() => {
+            const tl = buildTicketFollowUp(rawStatus);
+            return tl ? (
+              <RecommendationCard tindakLanjut={[tl]} title="Rekomendasi Tindak Lanjut" compact />
+            ) : null;
+          })()}
+
           {/* Details Grid */}
           <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200/60 text-xs">
             <div>
@@ -159,7 +173,7 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
         </div>
 
         {/* Footer actions */}
-        <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+        <div className="no-print p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
           <span className="text-[11px] text-slate-500">
             UU PDP: Data dienkripsi aman Dukcapil
           </span>

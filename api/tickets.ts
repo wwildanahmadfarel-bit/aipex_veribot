@@ -2,6 +2,7 @@ import { readJsonBody, setCors } from "./_lib/http.js";
 import { checkSimpleRateLimit, TICKET_HOUR } from "./_lib/rate-limit.js";
 import {
   BUKAN_KTP_MESSAGE,
+  JENIS_NIK_OPSIONAL,
   getSupabase,
   memTickets,
   normalizeJenisDokumen,
@@ -30,7 +31,9 @@ export default async function handler(req: any, res: any) {
     } catch (err) {
       console.warn("Supabase fetch all tickets warning:", err);
     }
-    return res.json({ success: true, data: memTickets, total: memTickets.length });
+    // Fallback memori juga dimasking (UU PDP) — jangan kembalikan nik_raw/phone/alamat.
+    const memPublic = memTickets.map(toPublicTicket);
+    return res.json({ success: true, data: memPublic, total: memPublic.length });
   }
 
   if (req.method === "POST") {
@@ -62,17 +65,11 @@ export default async function handler(req: any, res: any) {
         verification,
       } = body;
 
-      if (!nama_warga || !nik) {
-        return res.status(400).json({ success: false, message: "NIK dan Nama warga wajib diisi." });
-      }
-      const nikDigits = String(nik).replace(/\D/g, "");
-      if (nikDigits.length !== 16) {
-        return res.status(400).json({
-          success: false,
-          message: "NIK harus 16 digit angka. Tiket tidak dapat diterbitkan.",
-        });
+      if (!nama_warga) {
+        return res.status(400).json({ success: false, message: "Nama warga wajib diisi." });
       }
 
+      // Validasi bukti scan terlebih dahulu (menentukan aturan NIK per jenis dokumen).
       const scanJenisRaw =
         scan_jenis_dokumen ?? jenis_dokumen_scan ?? (verification as any)?.jenis_dokumen ?? null;
       const scanStatusRaw =
@@ -85,7 +82,7 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({
           success: false,
           message:
-            "Wajib verifikasi dokumen via scanner terlebih dahulu. Unggah foto e-KTP asli hingga terdeteksi sebagai dokumen kependudukan.",
+            "Wajib verifikasi dokumen via scanner terlebih dahulu. Unggah foto dokumen kependudukan asli hingga terdeteksi sebagai dokumen yang didukung.",
         });
       }
       const scanJenis = normalizeJenisDokumen(scanJenisRaw);
@@ -99,16 +96,34 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ success: false, message: BUKAN_KTP_MESSAGE });
       }
 
+      // NIK wajib 16 digit untuk dokumen berkartu (KTP/KK/AKTA/KIA); opsional
+      // untuk akta kematian/perkawinan & surat pindah (dokumen lama sering tanpa NIK).
+      const nikDigits = String(nik ?? "").replace(/\D/g, "");
+      const nikOpsional = JENIS_NIK_OPSIONAL.includes(scanJenis);
+      if (!nikOpsional && nikDigits.length !== 16) {
+        return res.status(400).json({
+          success: false,
+          message: "NIK harus 16 digit angka. Tiket tidak dapat diterbitkan.",
+        });
+      }
+      if (nikOpsional && nikDigits.length > 0 && nikDigits.length !== 16) {
+        return res.status(400).json({
+          success: false,
+          message: "NIK opsional untuk jenis dokumen ini — jika diisi harus 16 digit angka.",
+        });
+      }
+
       const date = new Date();
       const yearMonth = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}`;
       const randomCode = Math.floor(1000 + Math.random() * 9000);
       const ticketCode = `TKT-${yearMonth}-${randomCode}`;
-      const maskedNik =
-        nikDigits.length >= 12
+      const maskedNik = !nikDigits
+        ? "Tanpa NIK (opsional)"
+        : nikDigits.length >= 12
           ? `${nikDigits.slice(0, 6)}******${nikDigits.slice(-4)}`
           : `${nikDigits.slice(0, 3)}***${nikDigits.slice(-2)}`;
 
-      const awalStatusVerifikasi = scanStatus === "BURAM" ? "REVISI" : "PENDING";
+      const awalStatusVerifikasi = "PENDING"; // Semua tiket baru mulai dari PENDING
       const awalCatatan =
         catatan_ai ||
         (scanStatus === "BURAM"
@@ -133,7 +148,7 @@ export default async function handler(req: any, res: any) {
       };
       memTickets.unshift(newTicket);
       // Sembuhkan memori: baris NIK sama yang belum punya nomor ikut terisi.
-      if (phone) {
+      if (phone && nikDigits) {
         try {
           for (const t of memTickets) {
             const sameNik = (t as any).nik_raw === nikDigits;
@@ -142,7 +157,8 @@ export default async function handler(req: any, res: any) {
         } catch {}
       }
 
-      // Bukti simpan nomor: true bila ikut terkirim ke DB (false = kolom belum ada / DB mati).
+      // Bukti simpan nomor: true HANYA bila nomor benar-benar ikut tersimpan di DB
+      // (false = kolom belum dimigrasi / DB mati). Tidak boleh berbohong ke UI.
       let phoneSaved = false;
       if (supabase) {
         try {
@@ -152,22 +168,27 @@ export default async function handler(req: any, res: any) {
             nama: nama_warga,
             jenis_dokumen: jenis_dokumen || "KTP",
             skor_kejelasan: Number(skor_ai) || 88,
-            status_verifikasi: scanStatus === "BURAM" ? "BURAM" : "BERHASIL",
+            status_verifikasi: "PENDING", // Semua tiket baru mulai dari PENDING di DB
             catatan: awalCatatan,
           };
           if (phone) row.phone = String(phone);
+          if (alamat) row.alamat = String(alamat);
           let ins = await supabase.from("tickets").insert([row]);
-          // Fallback bila kolom phone belum dimigrasi di database.
-          if (ins.error && /phone/i.test(String(ins.error.message || ""))) {
+          // Fallback kolom belum dimigrasi (phone/alamat): buang kolom itu lalu
+          // ulangi — tiket TIDAK boleh gagal terbit hanya karena kolom belum ada.
+          for (let attempt = 0; attempt < 2 && ins.error; attempt++) {
+            const errMsg = String(ins.error.message || "");
+            const kolomHilang = /phone/i.test(errMsg) ? "phone" : /alamat/i.test(errMsg) ? "alamat" : null;
+            if (!kolomHilang || !row[kolomHilang]) break;
             try {
-              console.warn(`[tickets POST] kolom phone belum ada, nomor ${ticketCode} tidak persist. Jalankan migrasi 20260928_tiket_phone.sql.`);
+              console.warn(`[tickets POST] kolom ${kolomHilang} belum ada — tiket ${ticketCode} disimpan tanpa kolom itu. Jalankan migrasi supabase/migrations.`);
             } catch {}
-            delete row.phone;
+            delete row[kolomHilang];
             ins = await supabase.from("tickets").insert([row]);
           }
           if (ins.error) {
             console.warn("Supabase insert warning for new ticket:", ins.error);
-          } else if (phone) {
+          } else if (phone && row.phone && nikDigits) {
             phoneSaved = true;
             // Sembuhkan baris lama NIK sama yang belum punya nomor (mis. tiket
             // hasil pindai sebelum nomor dikirim) — best-effort.
@@ -192,7 +213,9 @@ export default async function handler(req: any, res: any) {
         phoneSaved,
         message: phoneSaved
           ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA tersimpan."
-          : "Tiket Fast-Track berhasil diterbitkan.",
+          : phone
+            ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA belum tersimpan di server — petugas akan verifikasi manual."
+            : "Tiket Fast-Track berhasil diterbitkan.",
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });

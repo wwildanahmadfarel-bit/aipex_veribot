@@ -56,7 +56,7 @@ export interface PrescreeningResult {
   skor_kejelasan: number;
   nik: string | null;
   nama: string | null;
-  jenis_dokumen: "e-KTP" | "KK" | "TIDAK_DIKETAHUI" | string;
+  jenis_dokumen: "e-KTP" | "KK" | "KIA" | "AKTA" | "AKTA_KEMATIAN" | "AKTA_PERKAWINAN" | "SURAT_PINDAH" | "TIDAK_DIKETAHUI" | string;
   catatan: string;
 }
 
@@ -71,7 +71,7 @@ export interface OcrPreScreenResult {
   nama_terdeteksi?: string;
   pencahayaan_status: "SESUAI_STANDAR" | "KURANG_TERANG" | "PANTULAN_SILAU";
   catatan: string;
-  jenis_dokumen?: "KTP" | "KK" | "AKTA" | "LAINNYA" | string;
+  jenis_dokumen?: "KTP" | "KK" | "AKTA" | "AKTA_KEMATIAN" | "AKTA_PERKAWINAN" | "SURAT_PINDAH" | "KIA" | "LAINNYA" | string;
   status_verifikasi?: "BERHASIL" | "BURAM" | "TIDAK_VALID" | string;
   isSystemError?: boolean;
   /** Area dokumen yang terdeteksi kurang jelas (untuk overlay pada pratinjau). */
@@ -87,7 +87,9 @@ export interface PreScreenInitialData {
   imageName?: string;
   service?: string;
   preScreenScore?: number;
-  /** Jenis dokumen hasil pra-pemeriksaan: KTP | KK | AKTA */
+  /** Jenis dokumen hasil pra-pemeriksaan: KTP | KK | AKTA | AKTA_KEMATIAN | AKTA_PERKAWINAN | SURAT_PINDAH | KIA | LAINNYA */
   jenisDokumen?: string;
+  /** Full verification result from pre-screen OCR */
+  verificationResult?: VerificationResult;
 }
 

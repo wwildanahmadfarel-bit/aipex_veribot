@@ -11,7 +11,9 @@ const MEM_CAP = 300;
 export const OCR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function cacheKey(fileHash: string): string {
-  return `rl:ocr-cache:${fileHash}`;
+  // v2: invalidation setelah dukungan jenis dokumen diperluas (akta kematian/
+  // perkawinan, surat pindah, KIA) — vonis lama "TIDAK_VALID" tidak boleh nyangkut.
+  return `rl:ocr-cache:v2:${fileHash}`;
 }
 
 export function isCacheableParsed(parsed: any): boolean {

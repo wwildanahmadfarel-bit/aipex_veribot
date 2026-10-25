@@ -51,7 +51,12 @@ export function isUsableAiParsed(parsed: any): boolean {
     // NIK hanya boleh digit / masker. Kata alfabet 3+ huruf = halusinasi.
     // Untuk status BURAM, teks seperti "Tidak Terdeteksi" wajar → biarkan
     // handler yang mengosongkan NIK (agar tidak memicu 502 keempat model).
-    if (status !== "BURAM" && /[A-Za-z]{3,}/.test(nikRaw)) return false;
+    // Idem untuk dokumen non-kartu (akta kematian/perkawinan & surat pindah)
+    // yang memang boleh tanpa NIK → handler yang membersihkan.
+    const nikOptionalJenis = /KEMATIAN|PERKAWINAN|KAWIN|NIKAH|PINDAH|SKPWNI|DEATH|MARRIAGE/i.test(
+      String(parsed.jenis_dokumen ?? "")
+    );
+    if (status !== "BURAM" && !nikOptionalJenis && /[A-Za-z]{3,}/.test(nikRaw)) return false;
   }
 
   if (status === "BERHASIL") {
@@ -60,7 +65,14 @@ export function isUsableAiParsed(parsed: any): boolean {
       .trim()
       .replace(/^NIK\b[:\s]*/i, "")
       .replace(/[\s.\-:/]/g, "");
-    if (!/^\d{16}$/.test(nik)) return false;
+    // Dokumen non-kartu (akta kematian/perkawinan lama, surat pindah) boleh
+    // tidak mencantumkan NIK 16 digit. Teks di field NIK (mis. "Tidak
+    // Terdeteksi") cukup dibersihkan handler tanpa menurunkan vonis; dokumen
+    // berkartu tetap wajib NIK 16 digit.
+    const nikOptional = /KEMATIAN|PERKAWINAN|KAWIN|NIKAH|PINDAH|SKPWNI|DEATH|MARRIAGE/i.test(
+      String(parsed.jenis_dokumen ?? "")
+    );
+    if (!nikOptional && !/^\d{16}$/.test(nik)) return false;
   }
 
   return true;

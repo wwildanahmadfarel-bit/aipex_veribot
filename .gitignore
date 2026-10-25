@@ -14,3 +14,6 @@ eval/*.enc
 private/
 *.enc
 eval/results-private.json
+
+# State lokal Supabase CLI — jangan di-commit
+supabase/.temp/
