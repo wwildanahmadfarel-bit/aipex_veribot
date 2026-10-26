@@ -18,7 +18,7 @@ Temuan dari audit kode (`api/_lib/ocr-handler.ts`, `api/_lib/http.ts`, `server.t
 
 Dampak: spammer/bot dapat melakukan loop upload ribuan kali, menghabiskan token Gemini/Nara Route, menaikkan tagihan, dan membuat layanan lambat/down untuk warga asli.
 
-Batasan bisnis: **tidak boleh ada login user** agar warga tetap 1-klik. Login hanya untuk petugas (`OfficerLoginModal` dengan kode akses seperti `849201`, `LOKET-SUKAMAJU-01`).
+Batasan bisnis: **tidak boleh ada login user** agar warga tetap 1-klik. Login hanya untuk petugas (`OfficerLoginModal` dengan username + password; lihat [`docs/AUTH-PETUGAS.md`](./AUTH-PETUGAS.md)). Kode akses lama sudah dihapus dari backend.
 
 ## 2. Tujuan & Non-Tujuan
 
@@ -52,7 +52,7 @@ Rasional 3x: warga valid biasanya butuh 1x scan berhasil, atau 2–3x foto ulang
 - **Warga Sari:** foto KTP sekali, langsung dapat QR Fast-Track. Tidak paham captcha. Harus tetap 1-klik.
 - **Warga Budi (foto buram):** gagal 1x karena silau, foto ulang ke-2 berhasil. Maksimal 5x masih tanpa hambatan berarti.
 - **Spammer/Bot:** script `while true; curl POST /api/ocr imageBase64=...`. Harus ditolak di request ke-4 dengan `429`, tanpa AI dipanggil.
-- **Petugas Loket:** login dengan kode akses, tidak terdampak rate-limit warga. Butuh dashboard `ocr_logs` untuk melihat IP abusif.
+- **Petugas Loket:** login dengan username + password, tidak terdampak rate-limit warga. Butuh dashboard `ocr_logs` untuk melihat IP abusif.
 
 ## 5. Requirement Fungsional
 

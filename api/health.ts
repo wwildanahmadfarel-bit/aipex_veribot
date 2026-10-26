@@ -1,6 +1,11 @@
 import { setCors } from "./_lib/http.js";
 import { isWaEnabled } from "./_lib/wa.js";
-import { isOfficerJwtConfigured } from "./_lib/officer-auth.js";
+import {
+  isOfficerJwtConfigured,
+  OFFICER_ACCESS_TTL_MS,
+  OFFICER_SESSION_TTL_MS,
+} from "./_lib/officer-auth.js";
+import { isOfficerAuthStoreConfigured } from "./_lib/officer-service.js";
 import { validateAiKeys } from "../services/ai_providers.js";
 
 export default async function handler(req: any, res: any) {
@@ -35,8 +40,11 @@ export default async function handler(req: any, res: any) {
     wa,
     adminAuth: {
       jwtConfigured: isOfficerJwtConfigured(),
+      sessionStoreConfigured: isOfficerAuthStoreConfigured(),
+      accessTtlHours: Math.round((OFFICER_ACCESS_TTL_MS / 3_600_000) * 100) / 100,
+      sessionTtlHours: Math.round((OFFICER_SESSION_TTL_MS / 3_600_000) * 100) / 100,
       hint: isOfficerJwtConfigured()
-        ? "Auth admin aktif — /api/admin/* wajib Bearer."
+        ? "Auth admin aktif — login username/password, /api/admin/* wajib Bearer. sessionStoreConfigured hanya menandakan env DB terisi; pastikan migrasi auth sudah dijalankan (docs/AUTH-PETUGAS.md)."
         : "OFFICER_JWT_SECRET kosong/pendek — login 503, /api/admin/* tolak semua.",
     },
     ai: aiKeys.map((k) => ({

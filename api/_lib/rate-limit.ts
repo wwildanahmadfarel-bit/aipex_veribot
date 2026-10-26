@@ -9,6 +9,8 @@ export interface RateLimitPreset {
   windowMs: number;
   max: number;
   prefix: string;
+  /** true = key hanya IP (user-agent tidak bisa dipakai untuk bypass). */
+  ipOnly?: boolean;
 }
 
 export const OCR_10MIN: RateLimitPreset = { windowMs: 10 * 60 * 1000, max: 20, prefix: "ocr10" };
@@ -286,7 +288,7 @@ export interface SimpleRateResult {
 export async function checkSimpleRateLimit(req: any, preset: RateLimitPreset, maxOverride?: number): Promise<SimpleRateResult> {
   const max = maxOverride ?? preset.max;
   const ip = getClientIp(req);
-  const ua = req?.headers?.["user-agent"];
+  const ua = preset.ipOnly ? "" : req?.headers?.["user-agent"];
   const ipHash = hashIp(ip, ua);
   const day = new Date().toISOString().slice(0, 10);
   const r = await incrWindow(`rl:${preset.prefix}:${ipHash}:${day}`, preset.windowMs);

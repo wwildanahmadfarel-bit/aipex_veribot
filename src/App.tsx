@@ -16,6 +16,7 @@ import OfficerLoginModal from "./components/OfficerLoginModal";
 import FloatingVeriBot from "./components/FloatingVeriBot";
 import { ExitDashboardConfirmModal } from "./components/ExitDashboardConfirmModal";
 import { Ticket, ServiceCatalogItem, PreScreenInitialData } from "./types";
+import { clearOfficerSession, getOfficerName } from "./lib/officerAuth";
 
 type AppView = "portal" | "wizard" | "login" | "officer" | "transparansi";
 
@@ -28,17 +29,6 @@ interface PendingNav {
 interface HistoryState {
   aipexView: AppView;
   targetId?: string;
-}
-
-function getOfficerName(): string {
-  try {
-    const raw = localStorage.getItem("aipex_officer");
-    if (!raw) return "";
-    const o = JSON.parse(raw) as { nama?: string };
-    return typeof o?.nama === "string" ? o.nama : "";
-  } catch {
-    return "";
-  }
 }
 
 function scrollToTarget(targetId?: string) {
@@ -317,9 +307,7 @@ export default function App() {
         {currentView === "officer" && (
           <AdminDashboard
             onLogout={() => {
-              try {
-                localStorage.removeItem("aipex_officer");
-              } catch {}
+              clearOfficerSession();
               setCurrentView("portal");
               window.scrollTo({ top: 0, behavior: "smooth" });
             }}

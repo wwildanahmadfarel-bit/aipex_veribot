@@ -15,28 +15,6 @@ import {
 export const BUKAN_KTP_MESSAGE =
   "File bukan Kartu Kependudukan Indonesia. Verifikasi AI mendukung e-KTP, Kartu Keluarga (KK), Kartu Identitas Anak (KIA), Akta Kelahiran/Kematian/Perkawinan, dan Surat Pindah (SKPWNI) asli — silakan unggah ulang foto dokumen yang jelas dan tidak terpotong.";
 
-export function normalizeAccessCode(raw: unknown): string {
-  if (typeof raw !== "string") return "";
-  return raw
-    .trim()
-    .toUpperCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/SUKAMAZU/g, "SUKAMAJU");
-}
-
-const FALLBACK_OFFICERS: { id: string; nama_petugas: string; role: string; kode_akses: string }[] = [
-  { id: "off-001", nama_petugas: "Bambang Sudiro, S.STP", role: "Kepala Seksi Pelayanan Kependudukan", kode_akses: "ADM-SUKAMAJU-2026" },
-  { id: "off-002", nama_petugas: "Siti Rahmawati, S.AP", role: "Petugas Loket 1 - e-KTP & Identitas", kode_akses: "849201" },
-  { id: "off-003", nama_petugas: "Ahmad Fauzi, S.Kom", role: "Supervisor VeriBot AI Kependudukan", kode_akses: "VERIBOT-ADMIN" },
-  { id: "off-004", nama_petugas: "Hendra Setiawan, S.IP", role: "Petugas Loket Fast-Track VeriBot AIPEX", kode_akses: "LOKET-SUKAMAJU-01" },
-  { id: "off-004", nama_petugas: "Hendra Setiawan, S.IP", role: "Petugas Loket Fast-Track VeriBot AIPEX", kode_akses: "LOKET-SUKAMAZU-01" },
-];
-
-export function findFallbackOfficer(normalized: string) {
-  return FALLBACK_OFFICERS.find((o) => normalizeAccessCode(o.kode_akses) === normalized) || null;
-}
-
 export type JenisDokumen =
   | "KTP"
   | "KK"

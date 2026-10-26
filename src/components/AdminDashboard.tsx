@@ -15,10 +15,20 @@ import {
   Calendar,
   Download,
   Printer,
-  Camera
+  Camera,
+  KeyRound,
+  LockKeyhole
 } from 'lucide-react';
 import { AipexLogo } from './AipexLogo';
 import { downloadTicketQrPng } from '../lib/ticketQr';
+import {
+  authFetch,
+  changeOfficerPassword,
+  clearOfficerSession,
+  ensureOfficerSession,
+  isPasswordChangeRequired,
+  logoutOfficer,
+} from '../lib/officerAuth';
 
 // Pemindai QR dimuat malas agar lib kamera (~350KB) tidak memberatkan bundle awal.
 const QrScanModal = React.lazy(() => import('./QrScanModal'));
@@ -41,7 +51,6 @@ export interface Officer {
   id: string;
   nama: string;
   role: string;
-  token?: string;
 }
 
 export interface AdminDashboardProps {
@@ -57,7 +66,7 @@ function getEmptyTickets(): Ticket[] {
 
 /** Viewer foto sementara tiket (didekripsi server per-request, no-store).
  *  Kosong bila foto tak tersimpan / sudah di-purge pasca-keputusan. */
-function TicketFotoViewer({ kodeTiket, getHeaders }: { kodeTiket: string; getHeaders: () => Record<string, string> }) {
+function TicketFotoViewer({ kodeTiket }: { kodeTiket: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "empty" | "error">("loading");
   const [reloadKey, setReloadKey] = useState(0);
@@ -69,9 +78,7 @@ function TicketFotoViewer({ kodeTiket, getHeaders }: { kodeTiket: string; getHea
     setUrl(null);
     (async () => {
       try {
-        const res = await fetch(`/api/tickets/foto?kode=${encodeURIComponent(kodeTiket)}`, {
-          headers: { ...getHeaders() },
-        });
+        const res = await authFetch(`/api/tickets/foto?kode=${encodeURIComponent(kodeTiket)}`);
         if (!alive) return;
         if (res.status === 404) {
           setState("empty");
@@ -125,6 +132,135 @@ function TicketFotoViewer({ kodeTiket, getHeaders }: { kodeTiket: string; getHea
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ForcePasswordChangePanel({
+  officerName,
+  onDone,
+}: {
+  officerName: string;
+  onDone: () => void;
+}) {
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    if (newPassword.length < 12) {
+      setErrorMsg('Password baru minimal 12 karakter.');
+      return;
+    }
+    if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      setErrorMsg('Password baru harus mengandung huruf dan angka.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrorMsg('Konfirmasi password tidak sama.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await changeOfficerPassword(oldPassword, newPassword);
+      alert('Password berhasil diubah. Silakan login ulang dengan password baru.');
+      onDone();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal mengganti password.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+        <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+          <div className="p-3 rounded-xl bg-amber-50 text-amber-600 border border-amber-100">
+            <LockKeyhole className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="font-bold text-[#0F172A]">Ganti Password Wajib</h2>
+            <p className="text-xs text-slate-500">
+              {officerName} masih memakai password sementara.
+            </p>
+          </div>
+        </div>
+
+        {errorMsg && (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wide">
+              Password Sementara
+            </label>
+            <div className="relative">
+              <input
+                type="password"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                required
+                autoFocus
+                autoComplete="current-password"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 text-[#0F172A] text-sm border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              />
+              <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wide">
+              Password Baru
+            </label>
+            <div className="relative">
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                placeholder="Minimal 12 karakter, huruf + angka"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 text-[#0F172A] text-sm border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              />
+              <LockKeyhole className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase tracking-wide">
+              Ulangi Password Baru
+            </label>
+            <div className="relative">
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 text-[#0F172A] text-sm border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              />
+              <LockKeyhole className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-sm py-2.5 rounded-xl shadow-sm transition cursor-pointer"
+          >
+            {loading ? 'Menyimpan...' : 'Simpan Password Baru'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
@@ -184,52 +320,37 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     return /^08\d{8,12}$/.test(d) || /^628\d{8,12}$/.test(d);
   })();
 
-  // Load Session Petugas jika tidak di-pass lewat props.
-  // JANGAN auto-login diam-diam: bila tidak ada session, biarkan null agar
-  // App dapat mengarahkan kembali ke login petugas.
+  // Load sesi petugas. Access token ada di memori modul auth; bila halaman
+  // di-reload, modul memanggil /api/admin/refresh memakai cookie HttpOnly.
   const [authChecked, setAuthChecked] = useState<boolean>(false);
+  const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
   useEffect(() => {
-    if (!officer) {
-      try {
-        const savedOfficer = localStorage.getItem('aipex_officer');
-        if (savedOfficer) {
-          setOfficer(JSON.parse(savedOfficer));
-        } else {
-          setOfficer(null);
-        }
-      } catch {
+    let alive = true;
+    (async () => {
+      const profile = propOfficer || (await ensureOfficerSession());
+      if (!alive) return;
+      if (profile) {
+        setOfficer(profile);
+        setMustChangePassword(isPasswordChangeRequired());
+      } else {
         setOfficer(null);
-      } finally {
-        setAuthChecked(true);
       }
-    } else {
       setAuthChecked(true);
-    }
-    fetchTickets();
+      if (profile && !isPasswordChangeRequired()) {
+        await fetchTickets();
+      } else {
+        setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  // Token JWT sesi petugas (disimpan bersama profil di localStorage saat login).
-  const officerToken = (): string => {
-    try {
-      const raw = localStorage.getItem('aipex_officer');
-      if (!raw) return "";
-      const o = JSON.parse(raw) as { token?: string };
-      return typeof o?.token === "string" ? o.token : "";
-    } catch {
-      return "";
-    }
-  };
-
-  const authHeaders = (): Record<string, string> => {
-    const t = officer?.token || officerToken();
-    return t ? { Authorization: `Bearer ${t}` } : {};
-  };
-
   const handleUnauthorized = () => {
-    try {
-      localStorage.removeItem('aipex_officer');
-    } catch {}
+    clearOfficerSession();
     setOfficer(null);
+    setMustChangePassword(false);
   };
 
   // Fetch Daftar Tiket dari API Backend (tanpa mock agar data jujur)
@@ -238,7 +359,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     setLoading(true);
     setFetchError("");
     try {
-      const res = await fetch('/api/admin/tickets', { headers: { ...authHeaders() } });
+      const res = await authFetch('/api/admin/tickets');
       if (res.status === 401) {
         handleUnauthorized();
         setFetchError("Sesi petugas kedaluwarsa. Login ulang.");
@@ -304,9 +425,9 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     const finalNotes = actionNotes || defaultNotes[status];
 
     try {
-      const res = await fetch('/api/admin/tickets', {
+      const res = await authFetch('/api/admin/tickets', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ticketId: selectedTicket.id,
           officerId: officer.id,
@@ -443,15 +564,31 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
+  if (authChecked && officer && mustChangePassword) {
+    return (
+      <ForcePasswordChangePanel
+        officerName={officer.nama}
+        onDone={() => {
+          if (onLogout) onLogout();
+          else window.location.reload();
+        }}
+      />
+    );
+  }
+
   if (authChecked && !officer) {
     return (
       <div className="min-h-[40vh] flex flex-col items-center justify-center gap-3 text-center p-8 bg-white rounded-2xl border border-slate-200">
         <AlertTriangle className="w-8 h-8 text-amber-500" />
         <h3 className="font-bold text-[#0F172A]">Sesi petugas tidak ditemukan</h3>
-        <p className="text-xs text-slate-500 max-w-sm">Silakan login ulang dengan kode akses petugas untuk membuka dashboard.</p>
+        <p className="text-xs text-slate-500 max-w-sm">Silakan login ulang dengan username dan password petugas untuk membuka dashboard.</p>
         <button
           type="button"
-          onClick={() => { try { localStorage.removeItem('aipex_officer'); } catch {} if (onLogout) onLogout(); else window.location.reload(); }}
+          onClick={async () => {
+            await logoutOfficer();
+            if (onLogout) onLogout();
+            else window.location.reload();
+          }}
           className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 cursor-pointer"
         >
           Kembali ke Login Petugas
@@ -490,10 +627,8 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
             <button
               id="adminLogoutBtn"
               type="button"
-              onClick={() => {
-                try {
-                  localStorage.removeItem('aipex_officer');
-                } catch {}
+              onClick={async () => {
+                await logoutOfficer();
                 if (onLogout) onLogout();
                 else window.location.reload();
               }}
@@ -918,7 +1053,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
                       <span>QR PNG</span>
                     </button>
                   </div>
-                  <TicketFotoViewer kodeTiket={selectedTicket.kode_tiket} getHeaders={authHeaders} />
+                  <TicketFotoViewer kodeTiket={selectedTicket.kode_tiket} />
                 </div>
 
                 {/* HASIL EKSTRAKSI OCR GEMINI */}

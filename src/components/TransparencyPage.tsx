@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { authFetch, ensureOfficerToken, getOfficerProfile } from "../lib/officerAuth";
 
 interface EvalAggregate {
   batch_id: string;
@@ -53,17 +54,6 @@ function readBatchFromUrl(): string {
   return raw.trim().replace(/[^A-Za-z0-9-]/g, "").slice(0, 32) || DEFAULT_BATCH;
 }
 
-function getOfficerToken(): string {
-  try {
-    const raw = localStorage.getItem("aipex_officer");
-    if (!raw) return "";
-    const o = JSON.parse(raw) as { token?: string };
-    return typeof o?.token === "string" ? o.token : "";
-  } catch {
-    return "";
-  }
-}
-
 export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
   const [batchId] = useState(readBatchFromUrl);
   const isDemo = batchId !== DEFAULT_BATCH;
@@ -72,6 +62,7 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
   const [detail, setDetail] = useState<EvalDetailRow[]>([]);
   const [detailState, setDetailState] = useState<"idle" | "loading" | "ready" | "denied" | "empty">("idle");
   const [retention, setRetention] = useState(14);
+  const [hasSession, setHasSession] = useState(() => Boolean(getOfficerProfile()));
 
   useEffect(() => {
     let alive = true;
@@ -93,17 +84,19 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
   }, [batchId]);
 
   const loadDetail = async () => {
-    const token = getOfficerToken();
+    const token = await ensureOfficerToken();
     if (!token) {
+      setHasSession(false);
       setDetailState("denied");
       return;
     }
+    setHasSession(true);
     setDetailState("loading");
     try {
-      const res = await fetch(`/api/eval?action=detail&batch_id=${encodeURIComponent(batchId)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.status === 401) {
+      const res = await authFetch(
+        `/api/eval?action=detail&batch_id=${encodeURIComponent(batchId)}`
+      );
+      if (res.status === 401 || res.status === 403) {
         setDetailState("denied");
         return;
       }
@@ -234,7 +227,7 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {!getOfficerToken() ? (
+            {!hasSession ? (
               <button
                 type="button"
                 onClick={onLogin}

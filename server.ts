@@ -27,7 +27,19 @@ import { isUsableAiParsed } from "./api/_lib/ai-response-guard";
 import { logOcrAttempt } from "./api/_lib/abuse-log";
 import { classifyAiFailure } from "./api/_lib/ai-errors";
 import { WaError, isWaEnabled, normalizeWa, sendFonnteWa, ticketStatusMessage } from "./api/_lib/wa";
-import { isOfficerJwtConfigured, officerUnauthorized, requireOfficer, signOfficerToken } from "./api/_lib/officer-auth";
+import {
+  isOfficerJwtConfigured,
+  OFFICER_ACCESS_TTL_MS,
+  OFFICER_SESSION_TTL_MS,
+  officerUnauthorized,
+  requireOfficer,
+} from "./api/_lib/officer-auth";
+import {
+  handleOfficerChangePassword,
+  handleOfficerLogin,
+  handleOfficerLogout,
+  handleOfficerRefresh,
+} from "./api/_lib/officer-http";
 import {
   BUKAN_KTP_MESSAGE,
   JENIS_DOKUMEN_VALID,
@@ -65,33 +77,6 @@ dotenv.config();
 // Validasi dini kunci AI (peringatan di log bila kosong/placeholder,
 // supaya ketahuan rusaknya saat start — bukan saat warga sudah memindai).
 logAiKeyStatus();
-
-// Normalisasi kode akses: trim, uppercase, rapikan separator, toleransi typo SUKAMAZU -> SUKAMAJU
-function normalizeAccessCode(raw: unknown): string {
-  if (typeof raw !== "string") return "";
-  return raw
-    .trim()
-    .toUpperCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/SUKAMAZU/g, "SUKAMAJU");
-}
-
-// Daftar petugas fallback resmi (satu sumber kebenaran untuk server Express)
-const FALLBACK_OFFICERS: { id: string; nama_petugas: string; role: string; kode_akses: string }[] = [
-  { id: "off-001", nama_petugas: "Bambang Sudiro, S.STP", role: "Kepala Seksi Pelayanan Kependudukan", kode_akses: "ADM-SUKAMAJU-2026" },
-  { id: "off-002", nama_petugas: "Siti Rahmawati, S.AP", role: "Petugas Loket 1 - e-KTP & Identitas", kode_akses: "849201" },
-  { id: "off-003", nama_petugas: "Ahmad Fauzi, S.Kom", role: "Supervisor VeriBot AI Kependudukan", kode_akses: "VERIBOT-ADMIN" },
-  { id: "off-004", nama_petugas: "Hendra Setiawan, S.IP", role: "Petugas Loket Fast-Track VeriBot AIPEX", kode_akses: "LOKET-SUKAMAJU-01" },
-  // Alias typo lama (SUKAMAZU) tetap diterima demi kompatibilitas
-  { id: "off-004", nama_petugas: "Hendra Setiawan, S.IP", role: "Petugas Loket Fast-Track VeriBot AIPEX", kode_akses: "LOKET-SUKAMAZU-01" },
-];
-
-function findFallbackOfficer(normalized: string) {
-  return (
-    FALLBACK_OFFICERS.find((o) => normalizeAccessCode(o.kode_akses) === normalized) || null
-  );
-}
 
 // --- Scanner KTP: normalisasi & pesan standar --------------------------------
 // Pesan baku saat file bukan dokumen kependudukan — satu sumber di api/_lib/store
@@ -436,6 +421,18 @@ async function startServer() {
 
   // CORS for local API access (termasuk header kunci Nara/OpenRouter manual via frontend)
   app.use((req, res, next) => {
+    // Auth petugas memakai cookie credentials; biarkan handler auth yang
+    // menetapkan Allow-Origin secara eksplisit (wildcard + credentials invalid).
+    const authPaths = [
+      "/api/admin/login",
+      "/api/admin/refresh",
+      "/api/admin/logout",
+      "/api/admin/change-password",
+      "/api/officer/login",
+    ];
+    if (authPaths.includes(req.path)) {
+      return next();
+    }
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     res.setHeader(
@@ -467,7 +464,12 @@ async function startServer() {
         tokenLen: waTokenLen,
         ready: waEnabled && waTokenLen > 0,
       },
-      adminAuth: { jwtConfigured: isOfficerJwtConfigured() },
+      adminAuth: {
+        jwtConfigured: isOfficerJwtConfigured(),
+        sessionStoreConfigured: Boolean(supabase),
+        accessTtlHours: Math.round((OFFICER_ACCESS_TTL_MS / 3_600_000) * 100) / 100,
+        sessionTtlHours: Math.round((OFFICER_SESSION_TTL_MS / 3_600_000) * 100) / 100,
+      },
       ai: aiKeys.map((k) => ({
         provider: k.provider,
         envVar: k.envVar,
@@ -1622,123 +1624,14 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     }
   });
 
-  // Admin & Officer Authentication & Verifikasi Kode Khusus
-  const handleAdminLogin = async (req: express.Request, res: express.Response) => {
-    try {
-      // Anti brute-force: maks 10x/10 mnt/IP.
-      const rl = await checkSimpleRateLimit(req, { windowMs: 10 * 60 * 1000, max: 10, prefix: "login10" });
-      if (!rl.allowed) {
-        try {
-          res.setHeader("Retry-After", String(rl.retryAfterSec));
-        } catch {}
-        return res.status(429).json({
-          success: false,
-          code: "LOGIN_RATE_LIMITED",
-          message: "Terlalu banyak percobaan login. Coba lagi beberapa menit.",
-          retryAfter: rl.retryAfterSec,
-        });
-      }
-      const kodeAkses = req.body.kodeAkses || req.body.kode_akses || req.body.pin;
-
-      if (!kodeAkses || typeof kodeAkses !== "string" || !kodeAkses.trim()) {
-        return res.status(400).json({
-          success: false,
-          message: "Kode akses wajib diisi",
-        });
-      }
-
-      const trimmedCode = kodeAkses.trim();
-      const normalizedCode = normalizeAccessCode(trimmedCode);
-      if (!normalizedCode) {
-        return res.status(400).json({ success: false, message: "Kode akses wajib diisi" });
-      }
-
-      // Deteksi kesalahan umum: user memasukkan kode tiket warga (TKT-/FT-) ke form login petugas
-      if (/^(TKT|FT)-/i.test(normalizedCode)) {
-        return res.status(401).json({
-          success: false,
-          code: "INVALID_CODE",
-          message: "Kode akses tidak valid.",
-        });
-      }
-
-      let officer: { id: string; nama_petugas: string; role: string; kode_akses?: string } | null = null;
-      let errorFromDb: any = null;
-
-      // 1. Cari petugas di database Supabase (tabel officers)
-      // Coba exact dulu, lalu case-insensitive (ilike) dengan versi normalisasi agar
-      // "loket-sukamaju-01" / " Loket Sukamaju 01 " tetap lolos.
-      if (supabase) {
-        try {
-          const exact = await supabase
-            .from("officers")
-            .select("id, nama_petugas, role, kode_akses")
-            .eq("kode_akses", trimmedCode)
-            .maybeSingle();
-
-          if (!exact.error && exact.data) {
-            officer = exact.data;
-          } else {
-            if (exact.error && (exact.error as any).code !== "PGRST116") errorFromDb = exact.error;
-            const insensitive = await supabase
-              .from("officers")
-              .select("id, nama_petugas, role, kode_akses")
-              .ilike("kode_akses", normalizedCode)
-              .maybeSingle();
-            if (!insensitive.error && insensitive.data) {
-              officer = insensitive.data;
-            } else if (insensitive.error && (insensitive.error as any).code !== "PGRST116") {
-              errorFromDb = insensitive.error;
-            }
-          }
-        } catch (err) {
-          errorFromDb = err;
-        }
-      }
-
-      // 2. Fallback petugas terdaftar resmi jika tabel officers belum dimigrasikan di database atau offline
-      if (!officer) {
-        const matched = findFallbackOfficer(normalizedCode);
-        if (matched) {
-          officer = matched;
-        }
-      }
-
-      if (!officer) {
-        console.warn(`[login] kode tidak valid (normalized): "${normalizedCode}" dbErr=${errorFromDb?.message || errorFromDb?.code || "-"}`);
-        return res.status(401).json({
-          success: false,
-          code: "INVALID_CODE",
-          message: "Kode akses tidak valid.",
-        });
-      }
-
-      // 3. Berhasil Login: terbitkan JWT 8 jam (stateless, verifikasi di semua instance)
-      if (!isOfficerJwtConfigured()) {
-        return res.status(503).json({
-          success: false,
-          code: "AUTH_NOT_CONFIGURED",
-          message: "Login petugas belum dikonfigurasi (OFFICER_JWT_SECRET kosong). Hubungi admin server.",
-        });
-      }
-      const officerProfile = { id: officer.id, nama: officer.nama_petugas, role: officer.role };
-      return res.json({
-        success: true,
-        message: "Login petugas berhasil",
-        officer: officerProfile,
-        token: signOfficerToken(officerProfile),
-        expiresInMs: 8 * 60 * 60 * 1000,
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        success: false,
-        error: err.message || "Terjadi kesalahan sistem",
-      });
-    }
-  };
-
-  app.post("/api/admin/login", handleAdminLogin);
-  app.post("/api/officer/login", handleAdminLogin);
+  // Admin & Officer Authentication — satu implementasi dengan Vercel Functions.
+  // Login memakai username + password; tidak ada fallback kode akses hardcoded.
+  // app.all agar preflight OPTIONS ditangani oleh setCors di handler auth.
+  app.all("/api/admin/login", handleOfficerLogin);
+  app.all("/api/officer/login", handleOfficerLogin);
+  app.all("/api/admin/refresh", handleOfficerRefresh);
+  app.all("/api/admin/logout", handleOfficerLogout);
+  app.all("/api/admin/change-password", handleOfficerChangePassword);
 
   // 1. GET: Ambil daftar pengajuan berkas warga untuk petugas (WAJIB Bearer)
   app.get("/api/admin/tickets", async (req, res) => {

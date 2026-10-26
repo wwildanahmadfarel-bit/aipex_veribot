@@ -1,12 +1,67 @@
 // Shared helpers untuk Vercel Serverless Functions — AIPEX VeriBot.
 // File di folder api/_lib TIDAK diekspos sebagai route (underscore prefix).
 
-export function setCors(req: any, res: any): boolean {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+export interface CorsOptions {
+  /** Aktifkan cookie lintas-origin. Jangan pernah pakai "*" bila true. */
+  credentials?: boolean;
+  /** Daftar origin yang diizinkan; default baca APP_ORIGIN/ADMIN_ORIGIN. */
+  allowedOrigins?: string[];
+}
+
+function configuredOrigins(extra?: string[]): string[] {
+  const fromEnv = `${process.env.APP_ORIGIN || ""},${process.env.ADMIN_ORIGIN || ""}`
+    .split(",")
+    .map((s) => s.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+  const all = [...fromEnv, ...(extra || []).map((s) => s.trim().replace(/\/+$/, "")).filter(Boolean)];
+  return [...new Set(all)];
+}
+
+function requestOrigin(req: any): string {
+  const origin = String(req?.headers?.origin || "").trim().replace(/\/+$/, "");
+  if (origin) return origin;
+  return "";
+}
+
+function sameOrigin(req: any, origin: string): boolean {
+  try {
+    const host = String(req?.headers?.["x-forwarded-host"] || req?.headers?.host || "").split(",")[0].trim();
+    if (!host || !origin) return false;
+    const proto = String(req?.headers?.["x-forwarded-proto"] || "https").split(",")[0].trim();
+    const expected = `${proto}://${host}`;
+    if (origin === expected) return true;
+    // Local dev / proxy yang tidak meneruskan x-forwarded-proto.
+    return origin === `http://${host}` || origin === `https://${host}`;
+  } catch {
+    return false;
+  }
+}
+
+export function setCors(req: any, res: any, options: CorsOptions = {}): boolean {
+  const credentials = Boolean(options.credentials);
+  const origin = requestOrigin(req);
+  const allowed = configuredOrigins(options.allowedOrigins);
+
+  if (credentials) {
+    let allowOrigin = "";
+    if (origin) {
+      // Same-origin selalu aman, termasuk preview deployment yang host-nya
+      // tidak tercantum di APP_ORIGIN produksi.
+      if (allowed.includes(origin) || sameOrigin(req, origin)) allowOrigin = origin;
+    }
+    if (allowOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+      res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-nara-route-api-key, x-nara-api-key"
+    "Content-Type, Authorization, x-officer-token, x-nara-route-api-key, x-nara-api-key, x-bynara-api-key, x-bynara-route-api-key"
   );
   if (req.method === "OPTIONS") {
     res.status(200).end();
@@ -15,7 +70,7 @@ export function setCors(req: any, res: any): boolean {
   return false;
 }
 
-/** Baca JSON body —兼容 Vercel bodyParser on/off. */
+/** Baca JSON body — kompatibel Vercel bodyParser on/off dan Express. */
 export async function readJsonBody(req: any): Promise<any> {
   if (req.body !== undefined && req.body !== null) {
     if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) return req.body;

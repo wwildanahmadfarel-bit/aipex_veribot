@@ -53,8 +53,9 @@ Foto dokumen **tidak pernah disimpan permanen**: diproses di memori, disalin ter
 
 ### F4 — Dashboard Petugas + Auth JWT + Notifikasi WA
 - **Manfaat:** keputusan tercatat, warga otomatis diberi tahu via WhatsApp.
-- **Cara kerja:** login kode akses → JWT HS256 8 jam; semua `/api/admin/*` wajib Bearer; `PATCH` status mengirim WA Fonnte — **gagal WA = status di-rollback** (mode ketat).
-- **Lokasi:** `api/admin/login.ts`, `api/admin/tickets.ts`, `api/_lib/officer-auth.ts`, `api/_lib/wa.ts`, `src/components/AdminDashboard.tsx`
+- **Cara kerja:** login **username + password** (scrypt) → access JWT HS256 8 jam + refresh cookie HttpOnly yang bisa dicabut; semua `/api/admin/*` wajib Bearer; `PATCH` status mengirim WA Fonnte — **gagal WA = status di-rollback** (mode ketat).
+- **Lokasi:** `api/admin/login.ts`, `api/admin/refresh.ts`, `api/admin/logout.ts`, `api/admin/change-password.ts`, `api/_lib/officer-service.ts`, `api/_lib/officer-http.ts`, `api/_lib/officer-auth.ts`, `src/lib/officerAuth.ts`, `api/admin/tickets.ts`, `api/_lib/wa.ts`, `src/components/AdminDashboard.tsx`
+- **Panduan:** [`docs/AUTH-PETUGAS.md`](./AUTH-PETUGAS.md)
 
 ### F5 — Anti-Spam Hemat Token AI
 - **Manfaat:** tagihan AI tidak jebol diserang bot; warga jujur tidak kena getahnya.
@@ -194,7 +195,7 @@ if (res.status === 404 || res.status >= 500)                         // cadangan
 4. Lacak via kolom **Lacak Status Resi** → masukkan kode tiket.
 
 ### Jalur B — Petugas: Putus Tiket (2 menit)
-1.Lihat  **Login Petugas** (kode akses resmi) → Dashboard → pilih tiket `PENDING`.
+1. Lihat **Login Petugas** (username + password resmi) → ganti password bila diminta → Dashboard → pilih tiket `PENDING`.
 2. foto bukti (terdekripsi sementara) → klik **Setujui / Tolak / Perlu Perbaikan** + catatan.
 3. Status berubah, foto ter-purge otomatis, warga menerima notifikasi WA (bila WA aktif).
 

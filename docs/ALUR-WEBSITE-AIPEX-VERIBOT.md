@@ -9,7 +9,7 @@ AIPEX VeriBot adalah portal layanan kependudukan Kelurahan Sukamaju (React 19 + 
 Prinsip utama:
 
 - **Warga tanpa login:** semua pra-pemeriksaan, wizard, dan lacak tiket terbuka agar 1-klik.
-- **Petugas dengan login kode akses:** `OfficerLoginModal.tsx` + `POST /api/admin/login`. Contoh valid: `849201`, `LOKET-SUKAMAJU-01`, `ADM-SUKAMAJU-2026`, `VERIBOT-ADMIN`. Ada fallback offline di frontend bila API mati.
+- **Petugas dengan username + password:** `OfficerLoginModal.tsx` + `POST /api/admin/login`. Password di-hash scrypt, access JWT 8 jam, refresh token di cookie HttpOnly. Kode akses lama dan fallback offline sudah dihapus. Detail: [`docs/AUTH-PETUGAS.md`](./AUTH-PETUGAS.md).
 - **UU PDP:** foto KTP/KK hanya diproses di RAM (multer memory / Buffer serverless), auto-purge, tidak disimpan ke disk. Yang disimpan hanya teks: NIK, nama, skor, status, catatan.
 - **AI ganda:** Nara Route (`https://router.bynara.id/v1`) prioritas untuk gambar non-PDF, Gemini (`gemini-2.5-flash`, `gemini-3.6-flash`) sebagai fallback/default. Chat FAQ juga punya knowledge-base offline agar tetap jawab walau AI mati.
 
@@ -124,18 +124,23 @@ Sumber: `src/data/servicesData.ts` (8 layanan):
 
 ```mermaid
 flowchart TD
-  A[Header Klik Login Petugas] --> B[OfficerLoginModal input kode akses]
-  B --> C[POST /api/admin/login {kodeAkses}]
-  C -- sukses --> D[localStorage aipex_officer + view officer]
-  C -- gagal tapi kode ada di fallback --> D
-  C -- gagal total --> E[Error: contoh 849201 / LOKET-SUKAMAJU-01]
-  D --> F[AdminDashboard / OfficerDashboard: daftar tiket, filter PENDING]
-  F --> G[1-klik APPROVED / REJECTED / REVISI + catatan_petugas]
-  G --> H[PATCH /api/admin/tickets atau /api/tickets/:id]
-  H --> I[Status terupdate + warga bisa lacak ulang]
+  A[Header Klik Login Petugas] --> B[OfficerLoginModal input username + password]
+  B --> C[POST /api/admin/login {username, password}]
+  C -- sukses, wajib ganti password --> D[Form ganti password]
+  D -- sukses --> E[Login ulang dengan password baru]
+  C -- sukses --> F[View officer; access token di memori + cookie refresh HttpOnly]
+  E --> F
+  C -- gagal --> G[Pesan generik: username atau password salah]
+  F --> H[AdminDashboard: daftar tiket, filter PENDING]
+  H --> I[1-klik APPROVED / REJECTED / REVISI + catatan_petugas]
+  I --> J[PATCH /api/admin/tickets]
+  J --> K[Status terupdate + warga bisa lacak ulang]
 ```
 
-Kode akses dinormalisasi (uppercase, spasi→strip, toleransi typo `SUKAMAZU→SUKAMAJU`). Kode tiket `TKT-...` ditolak untuk login dengan pesan khusus agar tidak tertukar dengan lacak tiket.
+Saat halaman di-reload, access token di memori hilang dan frontend memanggil
+`POST /api/admin/refresh` memakai cookie `aipex_refresh` (HttpOnly). Logout dan
+ganti password mencabut sesi refresh. Kode tiket `TKT-...` bukan kredensial
+petugas dan tidak bisa dipakai untuk login.
 
 ## 9. Alur Chatbot VeriBot (24 Jam)
 
