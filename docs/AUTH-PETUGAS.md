@@ -48,7 +48,7 @@ sequenceDiagram
   participant API as /api/admin/login
   participant DB as Supabase
   B->>API: POST {username, password}
-  API->>API: rate limit 10x/10 menit/IP
+  API->>API: rate limit login (default 10x/10 menit/IP)
   API->>API: cek Origin (CSRF)
   API->>DB: select officers by username
   alt username tidak ada / nonaktif / belum punya hash
@@ -195,6 +195,8 @@ service role atau secret.
 | `OFFICER_JWT_SECRET` | ya | — | minimal 32 karakter; HMAC HS256 |
 | `OFFICER_ACCESS_TTL_MS` | tidak | `28800000` (8 jam) | umur access JWT; min 1 menit, maks 30 hari |
 | `OFFICER_SESSION_TTL_MS` | tidak | `28800000` (8 jam) | umur absolut sesi refresh; min 1 menit, maks 30 hari |
+| `OFFICER_LOGIN_MAX` | tidak | `10` | maksimum percobaan login per IP per jendela; 1–1000 |
+| `OFFICER_LOGIN_WINDOW_MS` | tidak | `600000` (10 menit) | panjang jendela rate limit login; 1000–86400000 ms |
 | `APP_ORIGIN` | produksi | — | origin frontend, mis. `https://aipex.example.id`; boleh dipisah koma |
 | `ADMIN_ORIGIN` | tidak | — | origin admin tambahan; boleh dipisah koma |
 | `FORCE_SECURE_COOKIES` | tidak | `false` | `true` bila HTTPS non-production (mis. tunnel) |
@@ -214,6 +216,30 @@ Catatan:
   (berdasarkan `Host`/`x-forwarded-host`). Ini aman untuk deployment
   satu-domain, tetapi isi `APP_ORIGIN` bila frontend dan API berbeda origin.
 - Perubahan env memerlukan restart server lokal atau redeploy Vercel.
+
+### 4.1 Mode demo publik (sementara)
+
+Untuk demo dengan banyak pengunjung, rate limit login bisa dilonggarkan agar
+salah ketik password tidak langsung mengunci satu IP:
+
+```dotenv
+OFFICER_LOGIN_MAX=30
+OFFICER_LOGIN_WINDOW_MS=10000
+```
+
+Artinya **30 percobaan login / 10 detik / IP**. Setelah demo selesai, hapus kedua
+variabel (atau kembalikan ke `10` dan `600000`), lalu restart/redeploy.
+`GET /api/health` menampilkan konfigurasi yang sedang aktif di
+`adminAuth.loginRateLimit`.
+
+Catatan:
+
+- Semua percobaan login dihitung, bukan hanya password yang salah.
+- Pengguna di balik NAT/Wi-Fi yang sama berbagi kuota IP.
+- Jangan mematikan rate limit login total meskipun demo bersifat publik.
+- Refresh (120/10 menit) dan ganti password (10/10 menit) tidak ikut berubah.
+- Nilai env yang rusak atau di luar batas aman diabaikan dan kembali ke default
+  produksi; login tidak pernah menjadi tanpa batas karena salah ketik env.
 
 ---
 
@@ -272,6 +298,7 @@ APP_ORIGIN=https://<domain-anda>
 ```
 
 Jangan commit `.env.local`. Jangan menyalin nilai secret ke dokumentasi.
+Untuk demo publik, lihat bagian 4.1 (rate limit login sementara).
 
 ### Langkah 4 — Build dan uji unit
 
@@ -460,7 +487,7 @@ Kesalahan umum:
 | 400 | `INVALID_CREDENTIALS` | input tidak valid (tetap pesan generik) |
 | 401 | `INVALID_CREDENTIALS` | username/password salah, akun nonaktif, atau belum punya password |
 | 403 | `ORIGIN_REJECTED` | origin tidak diizinkan |
-| 429 | `LOGIN_RATE_LIMITED` | lebih dari 10 percobaan/10 menit/IP |
+| 429 | `LOGIN_RATE_LIMITED` | batas percobaan login/IP terlampaui (default 10/10 menit; demo dapat 30/10 detik) |
 | 503 | `AUTH_NOT_CONFIGURED` | `OFFICER_JWT_SECRET` kosong/pendek |
 | 503 | `AUTH_STORE_UNAVAILABLE` | env Supabase belum diisi |
 | 503 | `AUTH_SCHEMA_NOT_MIGRATED` | migrasi belum dijalankan |
@@ -528,7 +555,13 @@ akses tidak bisa dipakai lagi.
     "jwtConfigured": true,
     "sessionStoreConfigured": true,
     "accessTtlHours": 8,
-    "sessionTtlHours": 8
+    "sessionTtlHours": 8,
+    "loginRateLimit": {
+      "max": 10,
+      "windowMs": 600000,
+      "windowSec": 600,
+      "custom": false
+    }
   }
 }
 ```
@@ -536,6 +569,11 @@ akses tidak bisa dipakai lagi.
 `sessionStoreConfigured` hanya berarti environment Supabase terisi, **bukan**
 bukti migrasi sudah dijalankan. Bukti migrasi adalah login berhasil atau
 `GET /api/admin/tickets` tidak mengembalikan `AUTH_SCHEMA_NOT_MIGRATED`.
+
+`loginRateLimit` adalah konfigurasi yang benar-benar dipakai handler login.
+Untuk demo, nilainya bisa menjadi `max: 30`, `windowSec: 10`, `custom: true`.
+Nilai ini bukan rahasia, tetapi jangan gunakan health check untuk membuka detail
+konfigurasi internal lain di produksi.
 
 ---
 
@@ -602,18 +640,24 @@ ditambah jitter) memakai cookie baru dari tab yang menang. Sesi yang menang
 
 ### 9.3 Rate limit
 
-| Aksi | Batas | Kode |
-|---|---:|---|
-| Login | 10 / 10 menit / IP | `LOGIN_RATE_LIMITED` |
-| Refresh | 120 / 10 menit / IP | `REFRESH_RATE_LIMITED` |
-| Ganti password | 10 / 10 menit / IP | `PASSWORD_RATE_LIMITED` |
+| Aksi | Batas default | Mode demo | Kode |
+|---|---:|---:|---|
+| Login | 10 / 10 menit / IP | 30 / 10 detik / IP | `LOGIN_RATE_LIMITED` |
+| Refresh | 120 / 10 menit / IP | sama | `REFRESH_RATE_LIMITED` |
+| Ganti password | 10 / 10 menit / IP | sama | `PASSWORD_RATE_LIMITED` |
+
+Batas login diatur `OFFICER_LOGIN_MAX` dan `OFFICER_LOGIN_WINDOW_MS`. Perubahan
+env memakai prefix counter baru, sehingga counter lama dari konfigurasi
+sebelumnya tidak mengunci pengguna. Respons `429` menyertakan `retryAfter` dalam
+detik dan header `Retry-After`; nilainya tidak pernah melebihi panjang jendela.
 
 Rate limit auth memakai **IP saja**, bukan IP+User-Agent, agar penyerang tidak
 bisa mereset kuota hanya dengan mengganti User-Agent.
 
 Dengan `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`, counter dibagi
 antar-instance. Tanpa Redis, fallback memori bersifat best-effort dan tidak
-persisten di serverless.
+persisten di serverless. Untuk demo multi-instance, Redis sangat disarankan agar
+kuota 30/10 detik konsisten di semua instance.
 
 ### 9.4 CSRF / origin
 
@@ -670,7 +714,9 @@ npm run build
 - kebijakan password dan password sementara;
 - JWT dengan `sid`/`ver`, batas TTL 8 jam, dan token kedaluwarsa;
 - token lama tanpa `sid` ditolak;
-- atribut cookie (HttpOnly, Path, SameSite, Max-Age, clear cookie).
+- atribut cookie (HttpOnly, Path, SameSite, Max-Age, clear cookie);
+- parsing `OFFICER_LOGIN_MAX`/`OFFICER_LOGIN_WINDOW_MS`, fallback default
+  produksi untuk nilai rusak/di luar batas, dan prefix counter yang berubah.
 
 ### 10.2 Manual di browser
 
@@ -687,8 +733,11 @@ Checklist:
 - [ ] Logout → `/api/admin/tickets` tanpa token → `401`; refresh → `401`.
 - [ ] Nonaktifkan akun di DB → refresh berikutnya gagal dan sesi dicabut.
 - [ ] Ganti password → tab lain yang memakai sesi lama tidak bisa refresh.
-- [ ] 11 percobaan login dalam 10 menit → `429` + `Retry-After` (hati-hati: IP
-      ikut terkunci sementara).
+- [ ] `GET /api/health` → `adminAuth.loginRateLimit.max` dan `windowSec` sesuai env.
+- [ ] Mode default: percobaan login ke-11 dalam 10 menit → `429` +
+      `Retry-After` (hati-hati: IP ikut terkunci sementara).
+- [ ] Mode demo 30/10 detik: percobaan ke-31 dalam 10 detik → `429`, lalu setelah
+      ±10 detik percobaan berikutnya boleh lagi.
 - [ ] Token lama tanpa `sid` → `401 OFFICER_UNAUTHORIZED`.
 
 ### 10.3 Contoh cURL (lokal)
@@ -775,7 +824,7 @@ limit 20;
 | `401 SESSION_INVALID` | cookie hilang/kedaluwarsa/sesi dicabut | login ulang |
 | `401 OFFICER_UNAUTHORIZED` | Bearer tidak ada/token lama tanpa `sid` | login ulang; pastikan frontend baru |
 | `403 ORIGIN_REJECTED` | `APP_ORIGIN` tidak cocok | samakan origin atau kosongkan untuk same-origin |
-| `429` | rate limit | tunggu `Retry-After`, jangan loop login |
+| `429 LOGIN_RATE_LIMITED` | batas login/IP tercapai | tunggu `Retry-After`, jangan loop login; cek `adminAuth.loginRateLimit` di `/api/health` |
 | Cookie tidak tersimpan | HTTP + `Secure`, cross-site, path salah | pakai HTTPS atau `FORCE_SECURE_COOKIES=false`; same-origin |
 | Login `404` | hanya menjalankan `vite preview` | jalankan `npm run dev` |
 | `PGRST125` | `SUPABASE_URL` berakhiran `/rest/v1` | kode menormalkan; cek juga env lain |
@@ -848,6 +897,8 @@ rencana komunikasi ke petugas.
 - [ ] Cookie `HttpOnly`/`Secure`/`SameSite` diperiksa di DevTools.
 - [ ] `localStorage` tidak menyimpan access token.
 - [ ] Rate limit 429 diuji (hati-hati lockout).
+- [ ] Env demo `OFFICER_LOGIN_*` dihapus/dikembalikan ke default produksi.
+- [ ] `adminAuth.loginRateLimit` di `/api/health` menunjukkan `10/600` detik.
 - [ ] Semua petugas menerima username + password sementara secara aman.
 - [ ] `kode_akses` baru dihapus setelah semua akun dimigrasikan.
 - [ ] Audit dan retensi `officer_login_logs` disepakati.
@@ -863,6 +914,7 @@ rencana komunikasi ke petugas.
 | `api/_lib/officer-cookie.ts` | cookie refresh HttpOnly, baca/hapus |
 | `api/_lib/officer-service.ts` | login, refresh, logout, ganti password, audit |
 | `api/_lib/officer-http.ts` | handler HTTP bersama, rate limit, CORS/CSRF |
+| `api/_lib/officer-rate-limit.ts` | konfigurasi rate limit login (default produksi/demo) |
 | `api/admin/login.ts` | route login Vercel |
 | `api/admin/refresh.ts` | route refresh Vercel |
 | `api/admin/logout.ts` | route logout Vercel |
@@ -895,3 +947,6 @@ rencana komunikasi ke petugas.
    sementara agar migrasi akun tidak menghilangkan data, lalu boleh dihapus.
 7. **Token lama tanpa `sid` ditolak** agar token era kode akses tidak berlaku lagi.
 8. **Audit tanpa rahasia**: hanya hash username/IP, bukan password/token.
+9. **Rate limit login configurable, bukan dimatikan**: default produksi
+   10/10 menit/IP; demo memakai 30/10 detik/IP lewat env. Nilai rusak kembali ke
+   default, dan prefix counter berubah saat konfigurasi berubah.

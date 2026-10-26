@@ -40,6 +40,7 @@ import {
   handleOfficerLogout,
   handleOfficerRefresh,
 } from "./api/_lib/officer-http";
+import { getOfficerLoginRateLimitConfig } from "./api/_lib/officer-rate-limit";
 import {
   BUKAN_KTP_MESSAGE,
   JENIS_DOKUMEN_VALID,
@@ -452,6 +453,7 @@ async function startServer() {
     const ocrReady = aiKeys.some((k) => k.ready);
     const waTokenLen = String(process.env.FONNTE_TOKEN || "").trim().length;
     const waEnabled = isWaEnabled();
+    const loginLimit = getOfficerLoginRateLimitConfig();
     res.json({
       status: "ok",
       server: "AIPEX VeriBot Engine",
@@ -469,6 +471,12 @@ async function startServer() {
         sessionStoreConfigured: Boolean(supabase),
         accessTtlHours: Math.round((OFFICER_ACCESS_TTL_MS / 3_600_000) * 100) / 100,
         sessionTtlHours: Math.round((OFFICER_SESSION_TTL_MS / 3_600_000) * 100) / 100,
+        loginRateLimit: {
+          max: loginLimit.max,
+          windowMs: loginLimit.windowMs,
+          windowSec: Math.round(loginLimit.windowMs / 1000),
+          custom: loginLimit.custom,
+        },
       },
       ai: aiKeys.map((k) => ({
         provider: k.provider,

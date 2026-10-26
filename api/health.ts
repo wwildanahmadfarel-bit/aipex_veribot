@@ -6,6 +6,7 @@ import {
   OFFICER_SESSION_TTL_MS,
 } from "./_lib/officer-auth.js";
 import { isOfficerAuthStoreConfigured } from "./_lib/officer-service.js";
+import { getOfficerLoginRateLimitConfig } from "./_lib/officer-rate-limit.js";
 import { validateAiKeys } from "../services/ai_providers.js";
 
 export default async function handler(req: any, res: any) {
@@ -19,6 +20,7 @@ export default async function handler(req: any, res: any) {
   // Status WA Fonnte: boolean + panjang token saja, ISI TOKEN TIDAK PERNAH dikirim.
   const waTokenLen = String(process.env.FONNTE_TOKEN || "").trim().length;
   const waEnabled = isWaEnabled();
+  const loginLimit = getOfficerLoginRateLimitConfig();
   const wa = {
     enabled: waEnabled,
     tokenPresent: waTokenLen > 0,
@@ -43,6 +45,15 @@ export default async function handler(req: any, res: any) {
       sessionStoreConfigured: isOfficerAuthStoreConfigured(),
       accessTtlHours: Math.round((OFFICER_ACCESS_TTL_MS / 3_600_000) * 100) / 100,
       sessionTtlHours: Math.round((OFFICER_SESSION_TTL_MS / 3_600_000) * 100) / 100,
+      loginRateLimit: {
+        max: loginLimit.max,
+        windowMs: loginLimit.windowMs,
+        windowSec: Math.round(loginLimit.windowMs / 1000),
+        custom: loginLimit.custom,
+        hint: loginLimit.custom
+          ? "Rate limit login memakai nilai env OFFICER_LOGIN_MAX/OFFICER_LOGIN_WINDOW_MS. Hanya untuk demo; produksi sebaiknya 10 percobaan/10 menit."
+          : "Default produksi: 10 percobaan login/10 menit/IP.",
+      },
       hint: isOfficerJwtConfigured()
         ? "Auth admin aktif — login username/password, /api/admin/* wajib Bearer. sessionStoreConfigured hanya menandakan env DB terisi; pastikan migrasi auth sudah dijalankan (docs/AUTH-PETUGAS.md)."
         : "OFFICER_JWT_SECRET kosong/pendek — login 503, /api/admin/* tolak semua.",

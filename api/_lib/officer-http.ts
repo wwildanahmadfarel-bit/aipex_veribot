@@ -5,6 +5,10 @@
 import { readJsonBody, setCors } from "./http.js";
 import { checkSimpleRateLimit } from "./rate-limit.js";
 import {
+  getOfficerLoginRateLimitConfig,
+  getOfficerLoginRateLimitPreset,
+} from "./officer-rate-limit.js";
+import {
   isOfficerJwtConfigured,
   OFFICER_ACCESS_TTL_MS,
   officerUnauthorized,
@@ -27,7 +31,8 @@ import {
 } from "./officer-service.js";
 
 // ipOnly=true: ganti User-Agent tidak boleh mereset kuota brute-force.
-const LOGIN_10MIN = { windowMs: 10 * 60 * 1000, max: 10, prefix: "login10", ipOnly: true };
+// Login memakai preset dari env: default produksi 10/10 menit, demo bisa
+// 30/10 detik lewat OFFICER_LOGIN_MAX + OFFICER_LOGIN_WINDOW_MS.
 const REFRESH_10MIN = { windowMs: 10 * 60 * 1000, max: 120, prefix: "officerRefresh10", ipOnly: true };
 const CHANGE_PASSWORD_10MIN = { windowMs: 10 * 60 * 1000, max: 10, prefix: "officerPwd10", ipOnly: true };
 
@@ -127,7 +132,8 @@ export async function handleOfficerLogin(req: any, res: any): Promise<void> {
   if (!originAllowed(req)) return void rejectCsrf(res);
   if (authUnavailable(res)) return;
 
-  const rl = await checkSimpleRateLimit(req, LOGIN_10MIN);
+  const loginLimit = getOfficerLoginRateLimitConfig();
+  const rl = await checkSimpleRateLimit(req, getOfficerLoginRateLimitPreset());
   if (!rl.allowed) {
     try {
       res.setHeader("Retry-After", String(rl.retryAfterSec));
@@ -137,11 +143,17 @@ export async function handleOfficerLogin(req: any, res: any): Promise<void> {
       success: false,
       reason: "RATE_LIMITED",
     });
+    const waitText =
+      rl.retryAfterSec <= 60
+        ? `${rl.retryAfterSec} detik`
+        : `${Math.ceil(rl.retryAfterSec / 60)} menit`;
     res.status(429).json({
       success: false,
       code: "LOGIN_RATE_LIMITED",
-      message: "Terlalu banyak percobaan login. Coba lagi beberapa menit.",
+      message: `Terlalu banyak percobaan login. Coba lagi dalam ${waitText}.`,
       retryAfter: rl.retryAfterSec,
+      limit: loginLimit.max,
+      windowSec: Math.ceil(loginLimit.windowMs / 1000),
     });
     return;
   }

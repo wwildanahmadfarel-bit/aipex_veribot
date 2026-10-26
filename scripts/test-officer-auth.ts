@@ -38,6 +38,12 @@ const {
   clearOfficerRefreshCookie,
   readCookie,
 } = await import("../api/_lib/officer-cookie.ts");
+const {
+  getOfficerLoginRateLimitConfig,
+  getOfficerLoginRateLimitPreset,
+  OFFICER_LOGIN_DEFAULT_MAX,
+  OFFICER_LOGIN_DEFAULT_WINDOW_MS,
+} = await import("../api/_lib/officer-rate-limit.ts");
 
 async function testPassword(): Promise<void> {
   const password = "RahasiaPetugas123";
@@ -105,6 +111,88 @@ function testJwt(): void {
   assert.equal(auth.sessionId, "sid-test");
 }
 
+function testLoginRateLimit(): void {
+  const originalMax = process.env.OFFICER_LOGIN_MAX;
+  const originalWindow = process.env.OFFICER_LOGIN_WINDOW_MS;
+  const restore = () => {
+    if (originalMax === undefined) delete process.env.OFFICER_LOGIN_MAX;
+    else process.env.OFFICER_LOGIN_MAX = originalMax;
+    if (originalWindow === undefined) delete process.env.OFFICER_LOGIN_WINDOW_MS;
+    else process.env.OFFICER_LOGIN_WINDOW_MS = originalWindow;
+  };
+
+  try {
+    delete process.env.OFFICER_LOGIN_MAX;
+    delete process.env.OFFICER_LOGIN_WINDOW_MS;
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 10,
+      windowMs: 600_000,
+      custom: false,
+    });
+    assert.equal(OFFICER_LOGIN_DEFAULT_MAX, 10);
+    assert.equal(OFFICER_LOGIN_DEFAULT_WINDOW_MS, 600_000);
+
+    const defaultPreset = getOfficerLoginRateLimitPreset();
+    assert.equal(defaultPreset.max, 10);
+    assert.equal(defaultPreset.windowMs, 600_000);
+    assert.equal(defaultPreset.ipOnly, true);
+    assert.equal(defaultPreset.prefix, "officerLogin:10:600000");
+
+    process.env.OFFICER_LOGIN_MAX = "30";
+    process.env.OFFICER_LOGIN_WINDOW_MS = "10000";
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 30,
+      windowMs: 10_000,
+      custom: true,
+    });
+    assert.equal(getOfficerLoginRateLimitPreset().prefix, "officerLogin:30:10000");
+
+    // Nilai rusak/keluar batas kembali ke default produksi, bukan membuka limit.
+    process.env.OFFICER_LOGIN_MAX = "0";
+    process.env.OFFICER_LOGIN_WINDOW_MS = "999";
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 10,
+      windowMs: 600_000,
+      custom: false,
+    });
+
+    process.env.OFFICER_LOGIN_MAX = "1001";
+    process.env.OFFICER_LOGIN_WINDOW_MS = "86400001";
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 10,
+      windowMs: 600_000,
+      custom: false,
+    });
+
+    process.env.OFFICER_LOGIN_MAX = "abc";
+    process.env.OFFICER_LOGIN_WINDOW_MS = "";
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 10,
+      windowMs: 600_000,
+      custom: false,
+    });
+
+    process.env.OFFICER_LOGIN_MAX = "37.9";
+    process.env.OFFICER_LOGIN_WINDOW_MS = "1000";
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 37,
+      windowMs: 1_000,
+      custom: true,
+    });
+
+    // Batas atas yang masih sah.
+    process.env.OFFICER_LOGIN_MAX = "1000";
+    process.env.OFFICER_LOGIN_WINDOW_MS = "86400000";
+    assert.deepStrictEqual(getOfficerLoginRateLimitConfig(), {
+      max: 1000,
+      windowMs: 86_400_000,
+      custom: true,
+    });
+  } finally {
+    restore();
+  }
+}
+
 function testCookie(): void {
   const headers: Record<string, string> = {};
   const res = {
@@ -135,13 +223,20 @@ function testCookie(): void {
 
 await testPassword();
 testJwt();
+testLoginRateLimit();
 testCookie();
 
+const loginLimit = getOfficerLoginRateLimitConfig();
 console.log(
   JSON.stringify({
     ok: true,
     accessTtlHours: OFFICER_ACCESS_TTL_MS / 3_600_000,
     sessionTtlHours: OFFICER_SESSION_TTL_MS / 3_600_000,
+    loginRateLimit: {
+      max: loginLimit.max,
+      windowMs: loginLimit.windowMs,
+      custom: loginLimit.custom,
+    },
     note: "Unit test tanpa database. Uji login/refresh end-to-end butuh migrasi + akun petugas.",
   })
 );
