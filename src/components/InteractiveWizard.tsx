@@ -97,7 +97,6 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const saveNowRef = useRef<() => Promise<void>>(async () => {});
   // Refs for file inputs to clear them after validation
   const mainFileInputRef = useRef<HTMLInputElement>(null);
-  const supportFileInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Daftar berkas WAJIB mengikuti syarat layanan (badge WAJIB di katalog).
   // Sumber kebenaran tunggal: servicesData.ts — ubah di sana bila ketentuan berubah.
@@ -832,7 +831,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
         <button
           onClick={() => handleRequestExit("button")}
           type="button"
-          className="inline-flex items-center gap-1.5 text-[#2563eb] hover:text-blue-800 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
+          className="inline-flex items-center gap-1.5 text-brand hover:text-blue-800 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
         >
           <span className="material-symbols-outlined text-[18px]">arrow_back</span>
           <span>Kembali ke Beranda</span>
@@ -846,7 +845,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             </span>
           )}
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-300 bg-white/90 text-slate-700 text-xs font-medium backdrop-blur-xs shadow-2xs">
-            <span className="material-symbols-outlined text-[15px] text-[#2563eb]">verified_user</span>
+            <span className="material-symbols-outlined text-[15px] text-brand">verified_user</span>
             <span>Mode Mandiri Warga • UU PDP Protected</span>
           </div>
           {hasDraftData && currentStep < 4 && (
@@ -901,7 +900,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 md:p-8 max-w-5xl mx-auto w-full">
         {/* Top Badges Row */}
         <div className="flex items-center gap-2 mb-3">
-          <span className="px-2.5 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-[#2563eb] text-xs font-bold tracking-wide uppercase">
+          <span className="px-2.5 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-brand text-xs font-bold tracking-wide uppercase">
             FORMULIR INTERAKTIF
           </span>
           <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
@@ -926,7 +925,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           <div
             className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
               currentStep === 1
-                ? "bg-[#2563eb] text-white shadow-xs"
+                ? "bg-brand text-white shadow-xs"
                 : currentStep > 1
                 ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
                 : "text-slate-400"
@@ -935,7 +934,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             <span
               className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
                 currentStep === 1
-                  ? "bg-white text-[#2563eb]"
+                  ? "bg-white text-brand"
                   : currentStep > 1
                   ? "bg-emerald-600 text-white"
                   : "bg-slate-200 text-slate-500"
@@ -949,7 +948,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           <div
             className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
               currentStep === 2
-                ? "bg-[#2563eb] text-white shadow-xs"
+                ? "bg-brand text-white shadow-xs"
                 : currentStep > 2
                 ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
                 : "text-slate-400"
@@ -958,7 +957,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             <span
               className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
                 currentStep === 2
-                  ? "bg-white text-[#2563eb]"
+                  ? "bg-white text-brand"
                   : currentStep > 2
                   ? "bg-emerald-600 text-white"
                   : "bg-slate-200 text-slate-500"
@@ -972,7 +971,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           <div
             className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
               currentStep === 3
-                ? "bg-[#2563eb] text-white shadow-xs"
+                ? "bg-brand text-white shadow-xs"
                 : currentStep > 3
                 ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
                 : "text-slate-400"
@@ -981,7 +980,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             <span
               className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
                 currentStep === 3
-                  ? "bg-white text-[#2563eb]"
+                  ? "bg-white text-brand"
                   : currentStep > 3
                   ? "bg-emerald-600 text-white"
                   : "bg-slate-200 text-slate-500"
@@ -995,13 +994,13 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           <div
             className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
               currentStep === 4
-                ? "bg-[#2563eb] text-white shadow-xs"
+                ? "bg-brand text-white shadow-xs"
                 : "text-slate-400"
             }`}
           >
             <span
               className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
-                currentStep === 4 ? "bg-white text-[#2563eb]" : "bg-slate-200 text-slate-500"
+                currentStep === 4 ? "bg-white text-brand" : "bg-slate-200 text-slate-500"
               }`}
             >
               4
@@ -1062,7 +1061,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
             {/* OTP Alert Box */}
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
-              <span className="material-symbols-outlined text-[#2563eb] text-[22px] shrink-0 mt-0.5">
+              <span className="material-symbols-outlined text-brand text-[22px] shrink-0 mt-0.5">
                 verified_user
               </span>
               <p className="text-xs md:text-sm text-slate-700 leading-relaxed">
@@ -1226,7 +1225,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={handleProceedToStep2}
-                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#2563eb] hover:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-brand hover:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <span>Lanjut ke Upload Berkas</span>
                 <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
@@ -1248,7 +1247,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   Berkas pertama adalah dokumen utama yang dipindai AI.
                 </p>
               </div>
-              <span className="px-3 py-1 rounded-full bg-blue-50 text-[#2563eb] border border-blue-200 text-xs font-semibold self-start sm:self-center">
+              <span className="px-3 py-1 rounded-full bg-blue-50 text-brand border border-blue-200 text-xs font-semibold self-start sm:self-center">
                 UU PDP In-Memory Auto-Purge
               </span>
             </div>
@@ -1260,7 +1259,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 onClick={() => setUploadMode("individual")}
                 className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
                   uploadMode === "individual"
-                    ? "bg-white text-[#2563eb] shadow-2xs border border-blue-200"
+                    ? "bg-white text-brand shadow-2xs border border-blue-200"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
@@ -1272,7 +1271,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 onClick={() => setUploadMode("combined")}
                 className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
                   uploadMode === "combined"
-                    ? "bg-white text-[#2563eb] shadow-2xs border border-blue-200"
+                    ? "bg-white text-brand shadow-2xs border border-blue-200"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
@@ -1288,10 +1287,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               return (
                 <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-4 text-xs">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="font-bold text-[#0F172A] uppercase tracking-wide">
+                    <span className="font-bold text-ink uppercase tracking-wide">
                       Syarat Wajib {selectedService}
                     </span>
-                    <span className={`font-bold px-2.5 py-0.5 rounded-full border ${doneCount === requiredDocs.length ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-white text-[#2563eb] border-blue-200"}`}>
+                    <span className={`font-bold px-2.5 py-0.5 rounded-full border ${doneCount === requiredDocs.length ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-white text-brand border-blue-200"}`}>
                       {doneCount}/{requiredDocs.length} berkas terunggah
                     </span>
                   </div>
@@ -1304,9 +1303,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                             {filled ? "check_circle" : "radio_button_unchecked"}
                           </span>
                           <span>
-                            <strong className={filled ? "text-emerald-800" : "text-[#0F172A]"}>{i + 1}. {req.title}</strong>
+                            <strong className={filled ? "text-emerald-800" : "text-ink"}>{i + 1}. {req.title}</strong>
                             <span className="ml-1.5 px-1.5 py-px rounded text-[10px] font-bold uppercase bg-red-50 text-red-700 border border-red-200">Wajib</span>
-                            {i === 0 && <span className="ml-1.5 px-1.5 py-px rounded text-[10px] font-bold uppercase bg-blue-50 text-[#2563eb] border border-blue-200">Dipindai AI</span>}
+                            {i === 0 && <span className="ml-1.5 px-1.5 py-px rounded text-[10px] font-bold uppercase bg-blue-50 text-brand border border-blue-200">Dipindai AI</span>}
                           </span>
                         </li>
                       );
@@ -1369,10 +1368,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             {/* Slot 1: Dokumen utama (dipindai AI) */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="w-6 h-6 rounded-full bg-[#2563eb] text-white text-[11px] font-bold flex items-center justify-center shrink-0">1</span>
-                <span className="text-sm font-bold text-[#0F172A]">{requiredDocs[0]?.title}</span>
+                <span className="w-6 h-6 rounded-full bg-brand text-white text-[11px] font-bold flex items-center justify-center shrink-0">1</span>
+                <span className="text-sm font-bold text-ink">{requiredDocs[0]?.title}</span>
                 <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-red-50 text-red-700 border border-red-200">Wajib</span>
-                <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-blue-50 text-[#2563eb] border border-blue-200">Dipindai AI</span>
+                <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-blue-50 text-brand border border-blue-200">Dipindai AI</span>
               </div>
               <p className="text-[11px] text-slate-500 -mt-1">{requiredDocs[0]?.description}</p>
             <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-2xl p-6 bg-slate-50/50 hover:bg-blue-50/40 transition-colors relative">
@@ -1395,7 +1394,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       />
                     )}
                     <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-xs p-2 text-white flex items-center justify-between text-xs">
-                      <span className="truncate max-w-[220px]">{docImageName || "Dokumen Berkas Terpilih"}</span>
+                      <span className="truncate max-w-55">{docImageName || "Dokumen Berkas Terpilih"}</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -1416,10 +1415,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 </div>
               ) : (
                 <label className="flex flex-col items-center justify-center w-full cursor-pointer py-6">
-                  <div className="w-14 h-14 rounded-full bg-blue-100 text-[#2563eb] flex items-center justify-center mb-3 shadow-xs">
+                  <div className="w-14 h-14 rounded-full bg-blue-100 text-brand flex items-center justify-center mb-3 shadow-xs">
                     <span className="material-symbols-outlined text-[28px]">cloud_upload</span>
                   </div>
-                  <span className="text-sm font-bold text-[#0F172A]">
+                  <span className="text-sm font-bold text-ink">
                     Klik untuk Pilih Foto Dokumen atau Seret File ke Sini
                   </span>
                   <span className="text-xs text-slate-500 mt-1">
@@ -1445,7 +1444,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 <div key={`${selectedService}-${i}`} className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="w-6 h-6 rounded-full bg-slate-700 text-white text-[11px] font-bold flex items-center justify-center shrink-0">{i + 2}</span>
-                    <span className="text-sm font-bold text-[#0F172A]">{req.title}</span>
+                    <span className="text-sm font-bold text-ink">{req.title}</span>
                     <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-red-50 text-red-700 border border-red-200">Wajib</span>
                     <span className="px-1.5 py-px rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600 border border-slate-200">Lampiran</span>
                   </div>
@@ -1459,9 +1458,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       ) : (
                         <img src={f.base64} alt={req.title} className="w-16 h-12 object-cover rounded-lg border border-slate-200 bg-white shrink-0" />
                       )}
-                      <span className="text-xs font-semibold text-[#0F172A] truncate flex-1">{f.name}</span>
+                      <span className="text-xs font-semibold text-ink truncate flex-1">{f.name}</span>
                       <span className="text-xs text-emerald-700 font-semibold hidden sm:inline">Terunggah</span>
-                      <label className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-[#0F172A] text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
+                      <label className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-ink text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
                         Ganti
                         <input
                           type="file"
@@ -1476,11 +1475,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     </div>
                   ) : (
                     <label className="flex items-center justify-center gap-3 border-2 border-dashed border-slate-300 rounded-2xl p-5 bg-slate-50/50 hover:bg-blue-50/40 transition-colors cursor-pointer">
-                      <span className="w-10 h-10 rounded-full bg-blue-100 text-[#2563eb] flex items-center justify-center shrink-0">
+                      <span className="w-10 h-10 rounded-full bg-blue-100 text-brand flex items-center justify-center shrink-0">
                         <span className="material-symbols-outlined text-[22px]">cloud_upload</span>
                       </span>
                       <span>
-                        <span className="block text-xs font-bold text-[#0F172A]">Klik untuk unggah {req.title}</span>
+                        <span className="block text-xs font-bold text-ink">Klik untuk unggah {req.title}</span>
                         <span className="block text-[11px] text-slate-500 mt-0.5">Format: JPG, PNG, WEBP, atau PDF (Maksimal 4MB)</span>
                       </span>
                       <input
@@ -1523,7 +1522,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={handleStartAiScan}
-                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#2563eb] hover:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-brand hover:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">psychology</span>
                 <span>Mulai Pemindaian Cognitive AI</span>
@@ -1544,7 +1543,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   Memvalidasi keaslian, keterbacaan teks NIK, serta kualitas visual dokumen Anda.
                 </p>
               </div>
-              <span className="px-2.5 py-1 rounded-full bg-blue-50 text-[#2563eb] border border-blue-200 text-xs font-bold font-code-num">
+              <span className="px-2.5 py-1 rounded-full bg-blue-50 text-brand border border-blue-200 text-xs font-bold font-code-num">
                 {scanProgress}% SELESAI
               </span>
             </div>
@@ -1552,7 +1551,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             {/* Progress bar */}
             <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
               <div
-                className="bg-[#2563eb] h-full transition-all duration-300 rounded-full"
+                className="bg-brand h-full transition-all duration-300 rounded-full"
                 style={{ width: `${scanProgress}%` }}
               ></div>
             </div>
@@ -1597,7 +1596,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       : bukanKtp
                         ? "bg-red-50/80 border-red-200 text-red-950"
                         : sysErr
-                          ? "bg-slate-100 border-slate-300 text-[#0F172A]"
+                          ? "bg-slate-100 border-slate-300 text-ink"
                           : "bg-amber-50/80 border-amber-200 text-amber-950"
                   }`}
                 >
@@ -1647,7 +1646,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   </div>
 
                   {/* Score Pill */}
-                  <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-white border border-slate-200 shadow-2xs shrink-0 self-stretch sm:self-auto min-w-[120px]">
+                  <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-white border border-slate-200 shadow-2xs shrink-0 self-stretch sm:self-auto min-w-30">
                     <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
                       SKOR KELAYAKAN
                     </span>
@@ -1731,7 +1730,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                               Area buram tetap terdaftar di bawah berdasarkan koordinat halaman PDF.
                               Untuk melihat kotak overlay, unggah ulang sebagai foto JPG/PNG.
                             </p>
-                            <p className="text-[11px] text-slate-500 font-code-num truncate max-w-[260px]">
+                            <p className="text-[11px] text-slate-500 font-code-num truncate max-w-65">
                               {docImageName}
                             </p>
                           </div>
@@ -1740,7 +1739,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                           <img
                             src={docImageBase64}
                             alt="Pratinjau dokumen yang dipindai"
-                            className="block max-h-[420px] w-auto max-w-full rounded-lg select-none"
+                            className="block max-h-105 w-auto max-w-full rounded-lg select-none"
                           />
                           {showBlurAreas &&
                             areas.map((a, i) => {
@@ -1776,7 +1775,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                               <li key={`blur-row-${i}`} className="flex items-start gap-2 px-4 py-2">
                                 <span className={`mt-1 w-2.5 h-2.5 rounded-sm shrink-0 ${style.dot}`} />
                                 <div className="min-w-0">
-                                  <span className="font-semibold text-[#0F172A]">{blurAreaLabel(a.area)}</span>
+                                  <span className="font-semibold text-ink">{blurAreaLabel(a.area)}</span>
                                   <span className="text-slate-400"> — {style.label}</span>
                                   {a.description && <span className="text-slate-500"> ({a.description})</span>}
                                 </div>
@@ -1800,7 +1799,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   <div className="divide-y divide-slate-100 text-xs">
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Nomor Induk Kependudukan (NIK)</span>
-                      <span className="font-code-num font-semibold text-[#0F172A]">{verificationResult.nik || "—"}</span>
+                      <span className="font-code-num font-semibold text-ink">{verificationResult.nik || "—"}</span>
                       {nikOpsional && !nik.trim() ? (
                         <span className="font-semibold flex items-center gap-1 text-slate-500">
                           <span className="material-symbols-outlined text-[15px]">info</span>
@@ -1824,7 +1823,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Nama Pemohon</span>
-                      <span className="font-semibold text-[#0F172A]">{verificationResult.nama || "—"}</span>
+                      <span className="font-semibold text-ink">{verificationResult.nama || "—"}</span>
                       <span className={`font-semibold flex items-center gap-1 ${verificationResult.nama && verificationResult.nama.toLowerCase().trim() === nama.toLowerCase().trim() && verificationResult.nama.length > 0 ? "text-emerald-600" : "text-red-500"}`}>
                         <span className="material-symbols-outlined text-[15px]">
                           {verificationResult.nama && verificationResult.nama.toLowerCase().trim() === nama.toLowerCase().trim() && verificationResult.nama.length > 0 ? "check_circle" : "cancel"}
@@ -1841,7 +1840,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 p-3 gap-2">
                       <span className="text-slate-500 font-medium">Jenis Urusan / Berkas</span>
-                      <span className="text-[#0F172A]">
+                      <span className="text-ink">
                         {jenisLabel(verificationResult.jenis_dokumen)}
                         <span className="text-slate-400"> • {selectedService}</span>
                       </span>
@@ -1910,7 +1909,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       className={`w-full sm:w-auto px-6 py-3 rounded-xl font-semibold text-xs sm:text-sm shadow-md transition-all flex items-center justify-center gap-2 ${
                         isDisabled
                           ? "bg-slate-200 text-slate-400 cursor-not-allowed"
-                          : "bg-[#2563eb] hover:bg-blue-700 text-white cursor-pointer"
+                          : "bg-brand hover:bg-blue-700 text-white cursor-pointer"
                       }`}
                     >
                       <span>
@@ -1944,7 +1943,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             {/* Cetak hanya kartu tiket — sisanya disembunyikan saat print. */}
             <style>{`@media print { body * { visibility: hidden !important; } #wizardTicketPrintCard, #wizardTicketPrintCard * { visibility: visible !important; } #wizardTicketPrintCard { position: absolute !important; left: 0; top: 0; width: 100% !important; max-width: 100% !important; border-radius: 0 !important; box-shadow: none !important; } #wizardTicketPrintCard .no-print { display: none !important; } }`}</style>
             {/* Voucher Card Container */}
-            <div id="wizardTicketPrintCard" className="w-full max-w-lg bg-gradient-to-b from-blue-700 to-[#1e3a8a] text-white rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden border border-blue-400/30">
+            <div id="wizardTicketPrintCard" className="w-full max-w-lg bg-gradient-to-b from-blue-700 to-blue-900 text-white rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden border border-blue-400/30">
               <div className="absolute -right-12 -top-12 w-44 h-44 rounded-full bg-white/10 blur-2xl"></div>
 
               {/* Card Top Title */}
@@ -1990,7 +1989,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-blue-200">Urusan:</span>
-                  <span className="text-white font-medium text-right max-w-[220px]">
+                  <span className="text-white font-medium text-right max-w-55">
                     {generatedTicket.jenis_dokumen}
                   </span>
                 </div>
@@ -2025,7 +2024,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-[#0F172A] text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                className="flex-1 min-w-35 px-4 py-2.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-ink text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">print</span>
                 <span>Cetak Tiket PDF</span>
@@ -2037,7 +2036,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                   const text = `Halo, saya telah melakukan pra-pemeriksaan berkas di AIPEX VeriBot Kelurahan Sukamaju.%0AKode Tiket: ${generatedTicket.ticket_code}%0ANama: ${generatedTicket.nama_warga}%0ALayanan: ${generatedTicket.jenis_dokumen}%0AStatus: Fast-Track Lulus AI (${generatedTicket.skor_ai}%)`;
                   window.open(`https://wa.me/?text=${text}`, "_blank");
                 }}
-                className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                className="flex-1 min-w-35 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">share</span>
                 <span>Kirim ke WhatsApp</span>
@@ -2048,7 +2047,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 onClick={() => {
                   downloadTicketQrPng(generatedTicket).catch(() => alert('Gagal mengunduh QR PNG.'));
                 }}
-                className="flex-1 min-w-[140px] px-4 py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                className="flex-1 min-w-35 px-4 py-2.5 rounded-xl bg-ink hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">download</span>
                 <span>Unduh QR PNG</span>
@@ -2057,7 +2056,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={onBackToPortal}
-                className="w-full px-5 py-3 rounded-xl bg-[#2563eb] hover:bg-blue-700 text-white text-xs sm:text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer mt-1"
+                className="w-full px-5 py-3 rounded-xl bg-brand hover:bg-blue-700 text-white text-xs sm:text-sm font-bold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer mt-1"
               >
                 <span>Selesai & Kembali ke Beranda</span>
                 <span className="material-symbols-outlined text-[18px]">home</span>
@@ -2070,7 +2069,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       {/* Modal konfirmasi keluar — data tetap tersimpan sebagai draft */}
       {exitConfirmOpen && (
         <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          className="fixed inset-0 z-9999 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="exit-wizard-title"
@@ -2106,7 +2105,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={() => void handleConfirmExit()}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-[#2563eb] text-white text-xs sm:text-sm font-bold hover:bg-blue-700 transition-colors cursor-pointer"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-brand text-white text-xs sm:text-sm font-bold hover:bg-blue-700 transition-colors cursor-pointer"
               >
                 Keluar (draft tersimpan)
               </button>
