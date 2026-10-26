@@ -109,8 +109,9 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
           <p className="text-xs text-slate-500 mt-4" role="status" aria-live="polite">Memuat agregat…</p>
         ) : !agg ? (
           <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 leading-relaxed">
-            Belum ada run evaluasi. Setelah 100 foto terupload via <code className="font-code-num">POST /api/eval/upload</code>,
-            jalankan <code className="font-code-num">python scripts/evaluate-eval-bucket.py --batch ycwc-001</code>.
+            Belum ada run evaluasi. Siapkan foto di <code className="font-code-num">eval/private/</code> +
+            label di <code className="font-code-num">eval/labels.csv</code>, lalu jalankan{" "}
+            <code className="font-code-num">python scripts/evaluate-eval-bucket.py --all --base-url http://localhost:3000</code>.
             Metodologi lengkap: <code className="font-code-num">docs/METRIK-TRANSPARANSI.md</code>.
           </div>
         ) : (
@@ -124,6 +125,7 @@ export const TransparencyPage: React.FC<{ onLogin: () => void }> = ({ onLogin })
               { label: "Recall", value: pct(agg.recall) },
               { label: "Latency p50", value: agg.latency_p50 != null ? `${agg.latency_p50} ms` : "—" },
               { label: "Latency p95", value: agg.latency_p95 != null ? `${agg.latency_p95} ms` : "—" },
+              { label: "Cache-hit", value: pct(agg.cache_hit_rate) },
             ].map((k) => (
               <div key={k.label} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
                 <div className="text-[11px] text-slate-500 uppercase tracking-wide">{k.label}</div>

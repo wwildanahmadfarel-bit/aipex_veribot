@@ -1,6 +1,8 @@
 filename,jenis_true,status_true,lighting,device,relawan_id,consent_ref
-# Contoh (hapus baris contoh saat isi data asli — tanpa kolom NIK/nama):
+# jenis_true: KTP / KK / AKTA / AKTA_KEMATIAN / AKTA_PERKAWINAN / SURAT_PINDAH / KIA / LAINNYA
+# status_true: BERHASIL / BURAM / TIDAK_VALID
+# Contoh (baris komentar diabaikan; tanpa kolom NIK/nama):
 # P001.jpg,KTP,BERHASIL,terang,hp-murah,P01,CONS-001
 # P041.jpg,KK,BERHASIL,terang,hp-mid,P02,CONS-002
-# P061.jpg,KTP,BURAM,redup-silau,hp-murah,P01,CONS-001
+# P061.jpg,KIA,BURAM,redup-silau,hp-murah,P01,CONS-001
 # P081.jpg,LAINNYA,TIDAK_VALID,terang,hp-mid,P03,CONS-003

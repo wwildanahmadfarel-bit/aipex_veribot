@@ -39,5 +39,5 @@ Memastikan warga (termasuk lansia) bisa menyelesaikan pra-pemeriksaan dokumen ta
 
 ## 7. Jejak Audit
 - Batch: `ycwc-001` | Retensi eval: 14 hari | Tanggal purge terjadwal: ____
-- Operator ber-JWT: ____ (inisial saja)
+- Operator/ingest: ____ (inisial saja; bulk ingest lokal memakai service role, bukan JWT petugas)
 - Hasil agregat: lihat `docs/METRIK-TRANSPARANSI.md` + halaman `/transparansi` (Tier-1 publik).
