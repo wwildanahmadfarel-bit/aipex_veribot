@@ -85,6 +85,10 @@ DEFAULT_BATCH = "ycwc-001"
 DEFAULT_BASE_URL = "http://localhost:3000"
 
 
+def is_demo_batch(batch_id: str) -> bool:
+    return str(batch_id or "").strip().lower().startswith("demo-")
+
+
 def fail(message: str, code: int = 1) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(code)
@@ -757,6 +761,17 @@ def evaluate(sb, master: bytes, batch_id: str, base_url: str, limit: int, min_pu
         if true_label in confusion:
             confusion[true_label][pred_label] += 1
 
+    if is_demo_batch(batch_id):
+        public_notes = (
+            "DEMO sintetis: gambar buatan, bukan foto warga; bukan klaim akurasi ycwc-001. "
+            f"Macro F1 atas {macro['n_classes']} kelas yang ada di ground truth."
+        )
+    else:
+        public_notes = (
+            "Agregat saja (UU PDP). Foto asli di bucket privat eval-fotos. "
+            f"Macro F1 atas {macro['n_classes']} kelas yang ada di ground truth."
+        )
+
     public = {
         "batch_id": batch_id,
         "n": len(results),
@@ -774,10 +789,7 @@ def evaluate(sb, master: bytes, batch_id: str, base_url: str, limit: int, min_pu
         "latency_p50": int(p50),
         "latency_p95": int(p95),
         "cache_hit_rate": cache_hit_rate,
-        "notes": (
-            "Agregat saja (UU PDP). Foto asli di bucket privat eval-fotos. "
-            f"Macro F1 atas {macro['n_classes']} kelas yang ada di ground truth."
-        ),
+        "notes": public_notes,
     }
     os.makedirs("eval", exist_ok=True)
     with open("eval/results.json", "w", encoding="utf-8") as handle:
@@ -802,10 +814,15 @@ def publish_run(sb, batch_id: str, public: dict, results, failed_rows, allow_par
             "Perbaiki file bermasalah lalu ulangi, atau pakai --allow-partial bila memang ingin "
             "mempublikasikan sebagian (akan tercatat di notes)."
         )
+    source_note = (
+        "DEMO sintetis: gambar buatan, bukan foto warga; bukan klaim akurasi ycwc-001."
+        if is_demo_batch(batch_id)
+        else "foto asli di bucket privat eval-fotos."
+    )
     notes = (
         "Agregat 7 jenis + LAINNYA (UU PDP). "
         f"dievaluasi={public['n']}/{public['n_labels']}; gagal={public['n_failed']}; "
-        f"cache={public['cache_hit_rate']:.3f}; foto asli di bucket privat eval-fotos."
+        f"cache={public['cache_hit_rate']:.3f}; {source_note}"
     )
     run_row = {
         "batch_id": batch_id,

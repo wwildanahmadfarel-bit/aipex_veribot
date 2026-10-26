@@ -46,3 +46,17 @@ file_id/NIK/nama di dokumen ini.
 - `public/evidence/metrics/redacted-01.jpg`
 - `public/evidence/metrics/redacted-02.jpg`
 - `public/evidence/metrics/redacted-03.jpg`
+
+## 6. Demo Sintetis (batch `demo-001`)
+Untuk presentasi, tersedia 6 gambar sintetis yang **bukan** foto warga. Semua gambar
+diberi watermark “DEMO — DATA SINTETIS”, NIK palsu `0000000000000000`, dan nama fiktif.
+
+```bash
+python scripts/generate-demo-eval.py
+python scripts/evaluate-eval-bucket.py --all --batch demo-001 \
+  --labels-csv eval/demo/labels.csv --private-dir eval/demo/private \
+  --min-labels 6 --base-url http://localhost:3000
+```
+
+Halaman demo: `/transparansi?batch=demo-001` (badge DEMO otomatis tampil).
+Metrik demo **tidak boleh** diklaim sebagai hasil dataset asli `ycwc-001`.

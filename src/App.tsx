@@ -56,8 +56,35 @@ function buildState(view: AppView, targetId?: string): HistoryState {
   return { aipexView: view, targetId };
 }
 
+/**
+ * Izinkan tautan langsung ke halaman transparansi, misalnya:
+ *   /transparansi?batch=demo-001
+ *   /?view=transparansi&batch=demo-001
+ *   /#transparansi?batch=demo-001
+ * Tanpa URL khusus, aplikasi tetap mulai dari portal.
+ */
+function getInitialView(): AppView {
+  if (typeof window === "undefined") return "portal";
+  try {
+    const path = window.location.pathname.replace(/\/+$/, "").toLowerCase();
+    const params = new URLSearchParams(window.location.search);
+    const hash = window.location.hash.toLowerCase();
+    if (
+      path.endsWith("/transparansi") ||
+      params.get("view") === "transparansi" ||
+      params.has("batch") ||
+      hash.includes("transparansi")
+    ) {
+      return "transparansi";
+    }
+  } catch {}
+  return "portal";
+}
+
+const INITIAL_VIEW: AppView = getInitialView();
+
 export default function App() {
-  const [currentView, setCurrentView] = useState<"portal" | "wizard" | "login" | "officer" | "transparansi">("portal");
+  const [currentView, setCurrentView] = useState<"portal" | "wizard" | "login" | "officer" | "transparansi">(INITIAL_VIEW);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedService, setSelectedService] = useState<string>("Penerbitan KTP-EL Baru / Penggantian");
   const [selectedRequirementService, setSelectedRequirementService] = useState<ServiceCatalogItem | null>(null);
@@ -120,7 +147,7 @@ export default function App() {
   // currentView berubah, karena akan menimpa state entri wizard yang baru di-push.
   useEffect(() => {
     try {
-      history.replaceState(buildState("portal"), "");
+      history.replaceState(buildState(INITIAL_VIEW), "");
     } catch {}
   }, []);
 

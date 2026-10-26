@@ -32,6 +32,10 @@ function resolveAction(req: any): string {
 async function handleResults(req: any, res: any) {
   if (req.method !== "GET") return res.status(405).json({ success: false, message: "Method not allowed" });
   const batchId = String((req.query as any)?.batch_id || EVAL_BATCH_DEFAULT).trim() || EVAL_BATCH_DEFAULT;
+  const isDemoBatch = /^demo-/i.test(batchId);
+  const privacy = isDemoBatch
+    ? "Agregat demo sintetis. Gambar bukan foto warga; bukan klaim akurasi batch ycwc-001."
+    : "Agregat saja (UU PDP). Foto asli di bucket privat eval-fotos, tidak dipublikasi.";
   try {
     const supabase = getSupabase();
     if (supabase) {
@@ -50,7 +54,7 @@ async function handleResults(req: any, res: any) {
             tier: 1,
             batch_id: batchId,
             retention_days: evalRetentionDays(),
-            privacy: "Agregat saja (UU PDP). Foto asli di bucket privat eval-fotos, tidak dipublikasi.",
+            privacy,
             data,
           });
         }
@@ -62,9 +66,11 @@ async function handleResults(req: any, res: any) {
       tier: 1,
       batch_id: batchId,
       retention_days: evalRetentionDays(),
-      privacy: "Agregat saja (UU PDP). Foto asli di bucket privat eval-fotos, tidak dipublikasi.",
+      privacy,
       data: null,
-      hint: "Belum ada run evaluasi. Jalankan scripts/evaluate-eval-bucket.py setelah 100 foto terupload.",
+      hint: isDemoBatch
+        ? `Belum ada run untuk batch ${batchId}.`
+        : "Belum ada run evaluasi. Jalankan scripts/evaluate-eval-bucket.py setelah 100 foto terupload.",
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: String(err?.message || err).slice(0, 200) });

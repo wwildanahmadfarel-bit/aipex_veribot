@@ -54,3 +54,19 @@
 - Publish juga menolak batch yang belum mencapai 100 label (`--min-labels`). Untuk uji
   kecil, pakai `--min-labels 2` (jangan pakai `--allow-partial` hanya untuk melewati
   batas jumlah).
+
+## Demo sintetis (batch demo-001)
+
+Untuk presentasi tanpa memakai foto warga:
+
+```bash
+python scripts/generate-demo-eval.py
+python scripts/evaluate-eval-bucket.py --all --batch demo-001 \
+  --labels-csv eval/demo/labels.csv --private-dir eval/demo/private \
+  --min-labels 6 --base-url http://localhost:3000
+```
+
+Buka `/transparansi?batch=demo-001`. Halaman otomatis menampilkan badge DEMO dan
+judul demo. Semua gambar diberi watermark “DEMO — DATA SINTETIS”, NIK palsu
+`0000000000000000`, dan nama fiktif. Folder `eval/demo/` gitignored dan **tidak boleh**
+dicampur ke batch `ycwc-001`.

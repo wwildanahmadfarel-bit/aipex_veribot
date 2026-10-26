@@ -14,6 +14,8 @@ eval/*.enc
 private/
 *.enc
 eval/results-private.json
+# Demo sintetis 6 foto — hanya untuk presentasi, bukan data warga
+eval/demo/
 
 # State lokal Supabase CLI — jangan di-commit
 supabase/.temp/

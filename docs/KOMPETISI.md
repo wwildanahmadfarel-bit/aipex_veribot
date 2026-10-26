@@ -69,7 +69,8 @@ Foto dokumen **tidak pernah disimpan permanen**: diproses di memori, disalin ter
 ### F7 — Evaluasi Foto Asli + Transparansi Hibrida (batch ycwc-001)
 - **Manfaat:** klaim akurasi berdasar 100 foto asli warga (bukan dummy) dengan privasi terjaga — bukti Research & Evidence untuk juri.
 - **Cara kerja:** foto + label lokal di `eval/private/` + `eval/labels.csv` di-ingest via `scripts/evaluate-eval-bucket.py --ingest` (atau upload satuan via `POST /api/eval/upload` dengan JWT petugas) → enkripsi AES-256-GCM (`EVAL_MASTER_KEY` terpisah) → bucket privat `eval-fotos` (tanpa policy, hanya service_role); evaluasi memakai pipeline OCR yang sama dengan warga (NIK di-mask); `--publish` menulis agregat ke `eval_runs` + vonis per-file ke `eval_predictions`; publik hanya agregat di `GET /api/eval/results` → halaman `/transparansi` Tier-1; detail per-file tanpa foto di `GET /api/eval/detail` (JWT); purge hari ke-14 via `DELETE /api/eval/batch` + cron `purge-eval-fotos`.
-- **Lokasi:** `supabase/migrations/20261015_eval_fotos.sql`, `supabase/migrations/20261026_eval_jenis_7.sql`, `api/_lib/eval-foto.ts`, `api/eval/*.ts`, `api/cron/purge-eval-fotos.ts`, `scripts/evaluate-eval-bucket.py`, `src/components/TransparencyPage.tsx`, `docs/UJI-PENGGUNA.md`, `docs/METRIK-TRANSPARANSI.md`
+- **Lokasi:** `supabase/migrations/20261015_eval_fotos.sql`, `supabase/migrations/20261026_eval_jenis_7.sql`, `api/_lib/eval-foto.ts`, `api/eval/*.ts`, `api/cron/purge-eval-fotos.ts`, `scripts/evaluate-eval-bucket.py`, `scripts/generate-demo-eval.py`, `src/components/TransparencyPage.tsx`, `docs/UJI-PENGGUNA.md`, `docs/METRIK-TRANSPARANSI.md`
+- **Mode demo:** 6 gambar sintetis di batch `demo-001` (`scripts/generate-demo-eval.py`), dibuka di `/transparansi?batch=demo-001` dengan badge DEMO. Metrik demo terpisah dan tidak boleh diklaim sebagai hasil `ycwc-001`.
 
 ---
 
