@@ -915,10 +915,7 @@ rencana komunikasi ke petugas.
 | `api/_lib/officer-service.ts` | login, refresh, logout, ganti password, audit |
 | `api/_lib/officer-http.ts` | handler HTTP bersama, rate limit, CORS/CSRF |
 | `api/_lib/officer-rate-limit.ts` | konfigurasi rate limit login (default produksi/demo) |
-| `api/admin/login.ts` | route login Vercel |
-| `api/admin/refresh.ts` | route refresh Vercel |
-| `api/admin/logout.ts` | route logout Vercel |
-| `api/admin/change-password.ts` | route ganti password Vercel |
+| `api/admin/auth.ts` | satu fungsi dispatch login/refresh/logout/ganti password (URL publik tetap sama) |
 | `api/_lib/store.ts` | Supabase client + store; fallback kode akses sudah dihapus |
 | `server.ts` | server lokal Express memakai handler auth yang sama |
 | `src/lib/officerAuth.ts` | access token di memori, refresh, `authFetch` |
@@ -929,6 +926,8 @@ rencana komunikasi ke petugas.
 | `scripts/create-officer.ts` | buat/reset akun + password sementara |
 | `scripts/test-officer-auth.ts` | unit test auth tanpa database |
 | `.env.example` | contoh variabel environment (tanpa secret) |
+
+> **Catatan Vercel Hobby:** paket Hobby membatasi 12 Serverless Functions per deployment. Karena itu empat route auth digabung di `api/admin/auth.ts`; `vercel.json` me-rewrite `/api/admin/login`, `/api/admin/refresh`, `/api/admin/logout`, `/api/admin/change-password`, dan alias `/api/officer/login` ke fungsi tersebut. URL publik dan kontrak request/response tidak berubah, dan server lokal tetap mendaftarkan keempat path secara langsung.
 
 ---
 

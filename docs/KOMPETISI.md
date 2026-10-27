@@ -54,7 +54,7 @@ Foto dokumen **tidak pernah disimpan permanen**: diproses di memori, disalin ter
 ### F4 — Dashboard Petugas + Auth JWT + Notifikasi WA
 - **Manfaat:** keputusan tercatat, warga otomatis diberi tahu via WhatsApp.
 - **Cara kerja:** login **username + password** (scrypt) → access JWT HS256 8 jam + refresh cookie HttpOnly yang bisa dicabut; semua `/api/admin/*` wajib Bearer; `PATCH` status mengirim WA Fonnte — **gagal WA = status di-rollback** (mode ketat).
-- **Lokasi:** `api/admin/login.ts`, `api/admin/refresh.ts`, `api/admin/logout.ts`, `api/admin/change-password.ts`, `api/_lib/officer-service.ts`, `api/_lib/officer-http.ts`, `api/_lib/officer-auth.ts`, `src/lib/officerAuth.ts`, `api/admin/tickets.ts`, `api/_lib/wa.ts`, `src/components/AdminDashboard.tsx`
+- **Lokasi:** `api/admin/auth.ts`, `api/_lib/officer-service.ts`, `api/_lib/officer-http.ts`, `api/_lib/officer-auth.ts`, `src/lib/officerAuth.ts`, `api/admin/tickets.ts`, `api/_lib/wa.ts`, `src/components/AdminDashboard.tsx`
 - **Panduan:** [`docs/AUTH-PETUGAS.md`](./AUTH-PETUGAS.md)
 
 ### F5 — Anti-Spam Hemat Token AI

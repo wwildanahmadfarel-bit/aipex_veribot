@@ -6,7 +6,11 @@
   "rewrites": [
     { "source": "/api_tickets.php", "destination": "/api/admin/tickets" },
     { "source": "/api/eval/:action", "destination": "/api/eval?action=:action" },
-    { "source": "/api/officer/login", "destination": "/api/admin/login" },
+    { "source": "/api/officer/login", "destination": "/api/admin/auth?action=login" },
+    { "source": "/api/admin/login", "destination": "/api/admin/auth?action=login" },
+    { "source": "/api/admin/refresh", "destination": "/api/admin/auth?action=refresh" },
+    { "source": "/api/admin/logout", "destination": "/api/admin/auth?action=logout" },
+    { "source": "/api/admin/change-password", "destination": "/api/admin/auth?action=change-password" },
     { "source": "/api/ocr", "destination": "/api/scan-document" },
     { "source": "/api/:path*", "destination": "/api/:path*" }
   ],
