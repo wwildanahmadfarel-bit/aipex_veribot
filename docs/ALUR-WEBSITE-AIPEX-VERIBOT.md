@@ -35,27 +35,35 @@ Lokasi: `PortalHome.tsx` section `simulasiSection` → `OcrPreScreenCard.tsx`.
 ```mermaid
 flowchart TD
   A[Warga buka PortalHome] --> B[Klik Unggah Berkas / drag-drop JPG PNG WEBP PDF]
-  B --> C{Validasi frontend: tipe + max 10MB}
+  B --> C{Validasi frontend: tipe + PDF maks 10MB / gambar maks 4,2MB}
   C -- gagal --> C1[Tampilkan error, TIDAK ke backend]
-  C -- lolos --> D[FileReader → imageBase64]
-  D --> E[POST /api/ocr {imageBase64}]
+  C -- lolos --> D{PDF?}
+  D -- ya --> D1[Pecah per halaman di browser, maks 5 halaman]
+  D -- tidak --> D2[Satu halaman gambar]
+  D1 --> E[Untuk SETIAP halaman: POST /api/ocr]
+  D2 --> E
   E -- !ok --> F[fallback POST /api/scan-document]
-  E -- ok --> G[Parse respons]
+  E -- ok --> G[Normalisasi hasil per halaman]
   F --> G
-  G --> H{jenis_dokumen + status_verifikasi}
-  H -- LAINNYA / TIDAK_VALID --> I[Banner merah: File bukan KTP + tombol Unggah Ulang]
-  H -- BERHASIL --> J[Banner hijau: Layak + skor + NIK + nama + tombol Lanjut ke Formulir]
-  H -- BURAM valid KTP/KK/AKTA --> K[Banner kuning: Valid tapi buram + tetap bisa Lanjut ke QR]
-  H -- isSystemError --> L[Banner abu: Gagal memindai, coba lagi, BUKAN vonis bukan KTP]
-  J --> M[onProceedToWizard prefill NIK nama foto ke Wizard]
-  K --> M
+  G --> H[Kartu ringkasan semua halaman + pilih halaman]
+  H --> I{Ada halaman valid?}
+  I -- tidak, gangguan sistem --> I1[Banner abu: coba pindai ulang / lanjut isi manual]
+  I -- tidak, vonis invalid --> I2[Banner merah: unggah ulang dokumen asli]
+  I -- ya --> J[Dokumen utama: KTP valid skor tertinggi → halaman valid pertama]
+  J --> K[Warga bisa ganti dokumen utama / lihat detail tiap halaman]
+  K --> L[onProceedToWizard prefill NIK/nama/foto utama + semua halaman]
 ```
 
 Catatan penting:
 
 - `OcrPreScreenCard` punya race-guard (`scanIdRef`) agar hanya hasil terbaru tampil.
+- PDF **tidak dikirim utuh**: file dipecah di browser (`pdfSplitter.ts`), lalu satu halaman = satu request = satu kuota OCR. PDF 3 halaman = 3 panggilan.
+- Jenis dokumen dinilai per halaman, bukan per PDF. Halaman `TIDAK_VALID`/gangguan sistem tidak memblokir halaman lain.
+- Tombol lanjut memakai status **dokumen utama**, bukan halaman yang sedang dilihat. Halaman lain boleh invalid selama dokumen utama valid.
 - NIK parsial (`nik_partial`, mis. 12/16 digit) ditampilkan sebagai info, tapi tidak diteruskan ke wizard (wizard butuh 16 digit utuh).
-- PDF tidak ada preview `<img>`, hanya placeholder ikon berkas, tapi tetap dikirim ke backend (backend meneruskan PDF langsung ke Gemini, melewati Nara yang image-only).
+- PDF tidak ada preview `<img>`, hanya placeholder ikon berkas per halaman.
+- Gangguan AI/koneksi/kuota (`systemError`) dibedakan dari vonis “bukan dokumen kependudukan”. Halaman yang sudah selesai tetap ditampilkan bila pindaian berhenti di tengah PDF.
+- Detail batas, pemetaan, dan uji manual: [`docs/OCR-MULTI-HALAMAN.md`](./OCR-MULTI-HALAMAN.md).
 
 ## 4. Alur Warga — Wizard 4 Langkah (Jalur Resmi + QR)
 
@@ -65,12 +73,16 @@ Lokasi: `InteractiveWizard.tsx`. Bisa dibuka dari katalog layanan atau dari hasi
 
 - Input: `jenis layanan` (8 pilihan dari `servicesData.ts`), `NIK 16 digit`, `nama`, `WA`, `alamat`.
 - Validasi: NIK/nama/WA wajib, NIK harus 16 digit angka. Ada preset `Data Lengkap & Jelas` / `Berkas Agak Buram` untuk uji coba.
+- NIK/nama diisi dari dokumen utama hasil OCR. Nilai yang sudah diketik manual tidak ditimpa saat pemetaan berubah. Peringatan konteks muncul untuk KK/akta (data bisa milik kepala keluarga, anak, pasangan, atau almarhum).
+- **Akta kematian:** NIK/nama almarhum tidak pernah diisikan otomatis sebagai pemohon; isi data pemohon (keluarga) manual.
 
 ### Step 2 — Upload Berkas (sesuai syarat WAJIB layanan)
 
 - Slot upload = daftar `requirements` bertanda `mandatory` di `servicesData.ts` untuk layanan terpilih (mis. KTP: KTP lama/surat hilang + KK + Akta Kelahiran).
 - Slot 1 = dokumen utama (`docImageBase64`, dipindai AI di Step 3; terisi otomatis dari pra-pemeriksaan/preset). Slot 2..N = berkas pendukung (`supportFiles`, dilampirkan untuk verifikasi loket + tercatat di `catatan_ai` tiket).
-- Ganti layanan di Step 1 → seluruh upload di-reset. Jika ada slot kosong → alert blokir menyebut judul syarat yang kurang. Ada info UU PDP in-memory auto-purge.
+- **PDF multi-halaman dari pra-pemeriksaan:** panel “Pemetaan N halaman dokumen” menampilkan setiap halaman dan slotnya. Warga bisa mengubah dokumen utama, memindahkan halaman ke lampiran, atau menandai “Tidak dipakai”. Halaman invalid tidak bisa dipetakan.
+- Ganti layanan di Step 1: bila ada hasil OCR multi-halaman, halaman **dipetakan ulang otomatis tanpa memindai ulang**; bila tidak ada, seluruh upload di-reset seperti sebelumnya.
+- Mengganti/menghapus berkas manual akan melepas pemetaan otomatis agar tidak ada slot basi. Jika ada slot kosong → alert blokir menyebut judul syarat yang kurang. Ada info UU PDP in-memory auto-purge.
 
 ### Step 3 — Scanner AI
 

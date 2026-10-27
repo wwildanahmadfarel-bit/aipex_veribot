@@ -201,10 +201,21 @@ export function angkaKeKataId(n: number): string {
 
 /** "e-KTP Indonesia" → "KTP elektronik Indonesia" agar ejaan TTS natural. */
 function jenisSpoken(jenis?: string): string {
-  return String(jenis || "")
+  const raw = String(jenis || "").trim();
+  const upper = raw.toUpperCase().replace(/[\s-]+/g, "_");
+  if (/^E?_?KTP/.test(upper)) return "KTP elektronik";
+  if (upper === "KK" || upper.includes("KARTU_KELUARGA")) return "Kartu Keluarga";
+  if (upper === "KIA" || upper.includes("KARTU_IDENTITAS_ANAK")) return "Kartu Identitas Anak";
+  if (upper.includes("AKTA_KEMATIAN")) return "akta kematian";
+  if (upper.includes("AKTA_PERKAWINAN")) return "akta perkawinan";
+  if (upper.includes("AKTA")) return "akta kelahiran";
+  if (upper.includes("SURAT_PINDAH") || upper.includes("SKPWNI")) return "surat pindah";
+  if (upper.includes("LAINNYA")) return "dokumen lain";
+  return raw
     .replace(/e-?KTP/gi, "KTP elektronik")
     .replace(/\s*\(SKPWNI\)/gi, "")
-    .replace(/\s*\(KIA\)/gi, "");
+    .replace(/\s*\(KIA\)/gi, "")
+    .replace(/_/g, " ");
 }
 
 export interface PreScreenSpeechInput {
@@ -235,4 +246,126 @@ export function buildPreScreenSpeech(input: PreScreenSpeechInput): string {
   }
   const catatan = input.catatan ? ` Catatan AI: ${input.catatan}` : "";
   return `Dokumen terbaca, tetapi masih perlu perbaikan. Skor AI: ${skor} dari seratus.${jenis}${catatan} Anda tetap bisa melanjutkan; tiket terbit dengan catatan revisi. Bawa dokumen asli ke loket.`;
+}
+
+/** Satu halaman ringkas yang dibacakan pada ringkasan PDF multi-halaman. */
+export interface PreScreenSummarySpeechPage {
+  pageNumber: number;
+  jenis?: string;
+  statusVerifikasi?: string;
+  statusKelayakan?: string;
+  skor?: number;
+  isSystemError?: boolean;
+}
+
+export interface PreScreenSummarySpeechInput {
+  pages: PreScreenSummarySpeechPage[];
+  mainPageIndex?: number;
+  identityConflict?: boolean;
+}
+
+function halamanDikenal(page: PreScreenSummarySpeechPage): boolean {
+  if (page.isSystemError) return false;
+  const status = String(page.statusVerifikasi || "").toUpperCase().trim();
+  const jenis = String(page.jenis || "").toUpperCase().trim();
+  return status !== "TIDAK_VALID" && jenis !== "LAINNYA";
+}
+
+function halamanLayak(page: PreScreenSummarySpeechPage): boolean {
+  if (!halamanDikenal(page)) return false;
+  const status = String(page.statusVerifikasi || "").toUpperCase().trim();
+  if (status) return status === "BERHASIL";
+  return String(page.statusKelayakan || "").toUpperCase().trim() === "LAYAK";
+}
+
+/** "tiga" → "Tiga" untuk awal kalimat. */
+function kapitalAwal(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/**
+ * Ringkasan bacaan untuk PDF multi-halaman: menyebut SEMUA halaman, bukan hanya
+ * halaman yang sedang dilihat, lalu menegaskan dokumen utama dan konflik data.
+ * NIK/nama lengkap tidak dibacakan demi privasi di ruang publik.
+ */
+export function buildPreScreenSummarySpeech(input: PreScreenSummarySpeechInput): string {
+  const pages = Array.isArray(input.pages) ? input.pages : [];
+  if (!pages.length) return "";
+
+  const total = pages.length;
+  const layak = pages.filter(halamanLayak).length;
+  const perluDiperiksa = total - layak;
+  const ringkasanLayak =
+    layak === total
+      ? "semua layak"
+      : layak === 0
+        ? "belum ada yang layak"
+        : `${angkaKeKataId(layak)} layak`;
+  const bagian: string[] = [
+    `Pemindaian selesai. ${kapitalAwal(angkaKeKataId(total))} halaman diproses: ${ringkasanLayak}${
+      perluDiperiksa > 0 ? `, ${angkaKeKataId(perluDiperiksa)} perlu diperiksa` : ""
+    }.`,
+  ];
+
+  for (const page of pages) {
+    const nomor = angkaKeKataId(Math.max(1, Number(page.pageNumber) || 1));
+    if (page.isSystemError) {
+      bagian.push(`Halaman ${nomor} gagal dipindai karena gangguan sistem.`);
+      continue;
+    }
+    if (!halamanDikenal(page)) {
+      bagian.push(`Halaman ${nomor} bukan dokumen kependudukan yang didukung.`);
+      continue;
+    }
+    const jenis = jenisSpoken(page.jenis) || "dokumen";
+    const skor = angkaKeKataId(Number(page.skor));
+    if (halamanLayak(page)) {
+      bagian.push(
+        `Halaman ${nomor}, ${jenis}, layak dan terbaca jelas, skor ${skor} dari seratus.`
+      );
+    } else {
+      bagian.push(
+        `Halaman ${nomor}, ${jenis}, terbaca tetapi perlu perbaikan, skor ${skor} dari seratus.`
+      );
+    }
+  }
+
+  const main =
+    typeof input.mainPageIndex === "number" ? pages[input.mainPageIndex] : undefined;
+  const mainValid = main ? halamanDikenal(main) : false;
+  if (main && mainValid) {
+    const nomor = angkaKeKataId(Math.max(1, Number(main.pageNumber) || 1));
+    const jenis = jenisSpoken(main.jenis) || "dokumen";
+    if (/akta\s*kematian|kematian/i.test(String(main.jenis || ""))) {
+      bagian.push(
+        `Dokumen utama halaman ${nomor}, ${jenis}. NIK dan nama almarhum tidak diisikan sebagai pemohon; lengkapi data pemohon secara manual.`
+      );
+    } else {
+      bagian.push(
+        `Dokumen utama halaman ${nomor}, ${jenis}. NIK dan nama pemohon diambil dari halaman ini.`
+      );
+      if (
+        !/ktp|kartu tanda penduduk/i.test(String(main.jenis || "")) &&
+        !input.identityConflict
+      ) {
+        bagian.push("Pastikan dokumen utama memang milik pemohon.");
+      }
+    }
+  } else {
+    bagian.push(
+      "Belum ada dokumen utama yang valid. Anda tetap bisa melanjutkan dengan mengisi NIK dan nama secara manual."
+    );
+  }
+
+  if (input.identityConflict) {
+    bagian.push(
+      "Perhatian, data pemilik dokumen berbeda. Pastikan dokumen utama memang milik pemohon."
+    );
+  }
+
+  if (mainValid) {
+    bagian.push("Silakan periksa pemetaan halaman, lalu lanjutkan ke formulir.");
+  }
+
+  return bagian.join(" ");
 }

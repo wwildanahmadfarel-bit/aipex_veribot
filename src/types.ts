@@ -80,6 +80,20 @@ export interface OcrPreScreenResult {
   isOfflineDemo?: boolean;
 }
 
+/** Satu halaman PDF/foto yang sudah dipindai OCR pra-pemeriksaan. */
+export interface PreScreenPage {
+  /** 0-based, urutan halaman di berkas asli. */
+  pageIndex: number;
+  /** 1-based, untuk label "Halaman 1". */
+  pageNumber: number;
+  /** Data URL halaman (PDF satu halaman atau gambar asli). */
+  imageBase64: string;
+  imageName: string;
+  mimeType: string;
+  result: OcrPreScreenResult;
+  verification: VerificationResult;
+}
+
 export interface PreScreenInitialData {
   nik?: string;
   nama?: string;
@@ -91,5 +105,9 @@ export interface PreScreenInitialData {
   jenisDokumen?: string;
   /** Full verification result from pre-screen OCR */
   verificationResult?: VerificationResult;
+  /** Semua halaman yang berhasil/dikenali dari PDF multi-halaman. */
+  pages?: PreScreenPage[];
+  /** Indeks halaman yang dipilih sebagai dokumen utama (0-based). */
+  mainPageIndex?: number;
 }
 

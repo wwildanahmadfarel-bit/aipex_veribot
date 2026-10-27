@@ -19,10 +19,21 @@ export interface SplitResult {
   fileSize: number;
 }
 
-export async function splitPdfClientSide(file: File): Promise<SplitResult> {
+export interface SplitPdfOptions {
+  /** Tolak PDF bila jumlah halaman melebihi batas ini. */
+  maxPages?: number;
+}
+
+export async function splitPdfClientSide(file: File, options: SplitPdfOptions = {}): Promise<SplitResult> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const pageCount = pdf.getPageCount();
+
+  if (options.maxPages && pageCount > options.maxPages) {
+    throw new Error(
+      `PDF memiliki ${pageCount} halaman, sedangkan maksimal ${options.maxPages} halaman per pemindaian. Pisahkan PDF lalu unggah ulang.`
+    );
+  }
 
   const pages: PdfPageData[] = [];
 

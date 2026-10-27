@@ -14,14 +14,25 @@ import {
   ScanLine
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { OcrPreScreenResult, PreScreenInitialData, VerificationResult } from "../types";
+import { OcrPreScreenResult, PreScreenInitialData, PreScreenPage } from "../types";
 import { BLUR_SEVERITY_STYLE, blurAreaLabel, normalizeBlurAreas } from "../lib/blurAreas";
 import { buildScanRecommendations } from "../lib/recommendations";
 import { BUKAN_KTP_MESSAGE } from "../lib/messages";
-import { JENIS_META, isNikWajib, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
+import { JENIS_META, isNikWajib, jenisLabel } from "../lib/jenisDokumen";
 import { RecommendationCard } from "./RecommendationCard";
 import { SpeakResultButton } from "./SpeakResultButton";
-import { buildPreScreenSpeech } from "../lib/speech";
+import { buildPreScreenSpeech, buildPreScreenSummarySpeech } from "../lib/speech";
+import {
+  makePreScreenPage,
+  parseOcrPageResponse,
+  pickDefaultMainIndex,
+  prepareOcrPages,
+  summarizeIdentities,
+  isUsablePage,
+  mainPageIdentityNote,
+  toVerificationResult,
+  type PreparedOcrPage,
+} from "../lib/preScreenPages";
 import {
   PAGE_STARTED_AT,
   QUOTA_MAX,
@@ -58,77 +69,28 @@ const INITIAL_RESULT: OcrPreScreenResult = {
   status_verifikasi: "TIDAK_VALID",
 };
 
+/** Error per halaman; stopScan=true menghentikan sisa halaman (kuota/rate limit/jaringan). */
+class PageOcrError extends Error {
+  stopScan: boolean;
+  constructor(message: string, stopScan = true) {
+    super(message);
+    this.name = "PageOcrError";
+    this.stopScan = stopScan;
+  }
+}
+
+function friendlyOcrError(rawMsg: string): string {
+  let msg = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMsg)
+    ? "Gagal menghubungi server OCR. Periksa koneksi internet lalu pindai ulang."
+    : rawMsg || "Gagal menghubungi server OCR. Periksa koneksi lalu pindai ulang.";
+  if (isAiSystemErrorMessage(msg) && !/bukan salah foto anda/i.test(msg)) {
+    msg += " Bukan salah foto Anda.";
+  }
+  return msg;
+}
+
 /** Label & warna badge per jenis dokumen — satu sumber di lib/jenisDokumen. */
 export { JENIS_META, jenisLabel } from "../lib/jenisDokumen";
-
-/**
- * Susun alasan yang jelas dari hasil terstruktur: jenis + skor vs batas 70,
- * status NIK (lengkap/sebagian/tidak terbaca), nama, lalu saran spesifik AI.
- */
-function composeAlasan(args: {
-  jenis: string;
-  skor: number;
-  nikFull: string | null;
-  nikPartial: string | null;
-  nama: string | null;
-  saranAi: string;
-  tidakValid: boolean;
-  isLayak: boolean;
-}): string {
-  const label = jenisLabel(args.jenis);
-  if (args.tidakValid) {
-    return (
-      `${BUKAN_KTP_MESSAGE} ` +
-      "Pastikan yang difoto adalah dokumen kependudukan yang didukung " +
-      "(bukan SIM, paspor, atau swafoto), seluruh bingkai dokumen masuk, tidak silau, dan tidak terpotong."
-    );
-  }
-  const digitCount = args.nikFull
-    ? 16
-    : args.nikPartial
-      ? args.nikPartial.replace(/\D/g, "").length
-      : 0;
-  // Akta kematian/perkawinan & surat pindah: NIK opsional (dokumen lama sering
-  // tanpa NIK) — jangan tampilkan pesan "harus diketik manual".
-  const nikOpsional = !isNikWajib(args.jenis);
-  const nikInfo =
-    digitCount === 16
-      ? "NIK 16 digit terbaca lengkap."
-      : nikOpsional
-        ? digitCount > 0
-          ? `NIK terbaca sebagian (${digitCount}/16 digit) — untuk jenis dokumen ini NIK opsional; boleh dilengkapi manual bila tercantum.`
-          : "NIK tidak terbaca — tidak masalah, untuk jenis dokumen ini NIK opsional dan bisa dilengkapi di formulir bila tercantum."
-        : digitCount > 0
-          ? `NIK terbaca sebagian (${digitCount}/16 digit) — dilengkapi manual dari fisik dokumen atau foto ulang lebih fokus.`
-          : "NIK tidak terbaca — ketik manual dari fisik dokumen atau foto ulang lebih fokus tanpa silau.";
-  const namaInfo = args.nama
-    ? `Nama terbaca: ${args.nama}.`
-    : "Nama tidak terbaca — dilengkapi di formulir.";
-  if (args.isLayak) {
-    return (
-      `Terdeteksi ${label} asli yang valid (skor kejelasan ${args.skor}/100, batas lolos 70). ` +
-      `${nikInfo} ${namaInfo} ` +
-      (args.saranAi || "Dokumen layak — lanjut ke formulir untuk terbit QR Fast-Track.")
-    );
-  }
-  return (
-    `Terdeteksi ${label} asli tetapi skor kejelasan ${args.skor}/100 di bawah batas lolos 70. ` +
-    `${nikInfo} ${namaInfo} ` +
-    (args.saranAi || "Foto ulang di tempat terang tanpa lampu flash.") +
-    " Anda tetap bisa lanjut — tiket terbit dengan catatan REVISI; bawa fisik dokumen asli ke loket."
-  );
-}
-
-function normalizeStatus(raw: unknown): string {
-  const upper = String(raw ?? "").toUpperCase().trim().replace(/[\s-]+/g, "_");
-  if (["BERHASIL", "VALID", "LULUS", "LAYAK", "SUCCESS"].includes(upper)) return "BERHASIL";
-  if (
-    ["TIDAK_VALID", "TIDAKVALID", "INVALID", "LAINNYA", "REJECTED", "DITOLAK"].includes(upper) ||
-    upper.includes("BUKAN")
-  )
-    return "TIDAK_VALID";
-  return "BURAM";
-}
 
 /**
  * Penilaian offline lokal — dipakai HANYA saat Layanan AI gangguan
@@ -165,6 +127,8 @@ function isAiSystemErrorMessage(msg: string): boolean {
   );
 }
 
+/** Peringatan konteks saat dokumen utama bukan KTP pemohon. */
+
 function getImageDimensions(base64: string): Promise<{ w: number; h: number } | null> {
   return new Promise((resolve) => {
     try {
@@ -192,7 +156,11 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanProgress, setScanProgress] = useState<number>(0);
   const [scanStepText, setScanStepText] = useState<string>("Memulai analisis dokumen...");
-  const [previewResult, setPreviewResult] = useState<OcrPreScreenResult>(INITIAL_RESULT);
+  // Semua halaman hasil OCR. previewResult = halaman yang sedang dilihat.
+  const [pageResults, setPageResults] = useState<PreScreenPage[]>([]);
+  const [selectedPageIndex, setSelectedPageIndex] = useState<number>(0);
+  const [mainPageIndex, setMainPageIndex] = useState<number>(0);
+  const previewResult = pageResults[selectedPageIndex]?.result ?? INITIAL_RESULT;
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   // Anti-spam: picu render ulang info kuota lokal (advisory, server otoritatif).
@@ -216,7 +184,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
   const failPreview = (base64: string, fileName: string, message: string) => {
     clearStepTimeout();
     setScanProgress(100);
-    setPreviewResult({
+    const result: OcrPreScreenResult = {
       imageBase64: base64,
       imageName: fileName,
       status_kelayakan: "TIDAK_LAYAK",
@@ -230,7 +198,20 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
       jenis_dokumen: "LAINNYA",
       status_verifikasi: "TIDAK_VALID",
       isSystemError: true,
-    });
+    };
+    setPageResults([
+      {
+        pageIndex: 0,
+        pageNumber: 1,
+        imageBase64: base64,
+        imageName: fileName,
+        mimeType: "application/octet-stream",
+        result,
+        verification: toVerificationResult(result),
+      },
+    ]);
+    setSelectedPageIndex(0);
+    setMainPageIndex(0);
     setIsScanning(false);
     setIsScanned(true);
   };
@@ -239,6 +220,129 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
     if (file.type.startsWith("image/")) return true;
     if (file.type === "application/pdf") return true;
     return /\.(jpe?g|png|webp|pdf)$/i.test(file.name);
+  };
+
+  /** Kirim satu halaman ke OCR; mengembalikan JSON respons. */
+  const requestPageOcr = async (
+    imageBase64: string,
+    pageLabel: string,
+    myScanId: number
+  ): Promise<any> => {
+    const siteKey = getTurnstileSiteKey();
+    let turnstileToken: string | null = null;
+    if (siteKey && getQuotaState().remaining <= 1) {
+      setScanStepText(`${pageLabel}: memverifikasi manusia (captcha)...`);
+      turnstileToken = await getTurnstileToken(siteKey);
+    }
+
+    const buildBody = () =>
+      JSON.stringify({
+        imageBase64,
+        startedAt: PAGE_STARTED_AT,
+        website_confirm: "",
+        ...(turnstileToken ? { turnstileToken } : {}),
+      });
+
+    // POST dengan timeout 60 dtk agar "fetch failed" tidak gantung.
+    const postOnce = (url: string): Promise<Response> => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60_000);
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: buildBody(),
+        signal: ctrl.signal,
+      }).finally(() => clearTimeout(timer));
+    };
+
+    // Satu percobaan penuh: POST -> fallback (404 saja) -> captcha 403.
+    const doAttempt = async (): Promise<Response> => {
+      let response: Response;
+      try {
+        response = await postOnce("/api/ocr");
+      } catch {
+        response = await postOnce("/api/scan-document");
+      }
+      if (myScanId !== scanIdRef.current) return response;
+      if (response.status === 404) {
+        try {
+          const alt = await postOnce("/api/scan-document");
+          if (myScanId !== scanIdRef.current) return response;
+          response = alt;
+        } catch {
+          // pertahankan respons awal
+        }
+      }
+      if (response.status === 403) {
+        const err0 = await readErrorJson(response);
+        if (err0.captchaRequired) {
+          if (myScanId !== scanIdRef.current) return response;
+          setScanStepText(`${pageLabel}: memverifikasi manusia (captcha)...`);
+          turnstileToken = await getTurnstileToken(siteKey);
+          if (myScanId !== scanIdRef.current) return response;
+          if (turnstileToken) {
+            try {
+              response = await postOnce("/api/ocr");
+            } catch {
+              response = await postOnce("/api/scan-document");
+            }
+            if (myScanId !== scanIdRef.current) return response;
+          } else {
+            throw new PageOcrError(
+              "Verifikasi manusia diperlukan dan captcha gagal dimuat. Periksa koneksi lalu pindai ulang, atau lanjut via Isi Manual di bawah."
+            );
+          }
+        }
+      }
+      return response;
+    };
+
+    const ensureOkOrRetry = async (attempt: 0 | 1): Promise<Response> => {
+      const response = await doAttempt();
+      if (myScanId !== scanIdRef.current) return response;
+      if (response.ok) {
+        recordScanAttempt();
+        setQuotaTick((t) => t + 1);
+        return response;
+      }
+      const err = await readErrorJson(response);
+      if (isTransientAiError(err, response.status) && attempt === 0) {
+        const waitSec = transientRetrySec(err.subcode, err.retryAfter);
+        for (let left = waitSec; left > 0; left--) {
+          if (myScanId !== scanIdRef.current) return response;
+          setScanStepText(
+            `${pageLabel}: layanan AI sibuk — mencoba otomatis dalam ${left} dtk (percobaan 2/2)...`
+          );
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        if (myScanId !== scanIdRef.current) return response;
+        setScanStepText(`${pageLabel}: menjalankan OCR ulang...`);
+        return ensureOkOrRetry(1);
+      }
+      if (!isQuotaFreeCode(err.code)) {
+        recordScanAttempt();
+        setQuotaTick((t) => t + 1);
+      }
+      let msg = String(err.message || `Gagal memindai halaman (HTTP ${response.status}).`);
+      if (response.status === 429 && err.retryAfter > 0) {
+        msg += ` Coba lagi dalam ${formatCountdown(err.retryAfter)}.`;
+      } else if (isTransientAiError(err, response.status)) {
+        const waitSec = transientRetrySec(err.subcode, err.retryAfter);
+        msg += ` Layanan AI masih sibuk. Coba lagi sekitar ${waitSec} detik atau lanjut isi manual.`;
+      }
+      throw new PageOcrError(msg);
+    };
+
+    const response = await ensureOkOrRetry(0);
+    if (!response.ok) {
+      // ensureOkOrRetry sudah melempar; ini jaga-jaga bila respons basi.
+      throw new PageOcrError(`Gagal memindai halaman (HTTP ${response.status}).`, false);
+    }
+    const data = await response.json().catch(() => null);
+    if (!data || typeof data !== "object") {
+      throw new PageOcrError("Respons OCR tidak valid. Coba pindai ulang.", false);
+    }
+    return data;
   };
 
   const processUploadedFile = (file: File) => {
@@ -251,292 +355,157 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
       return;
     }
 
-    // Validasi lebih dulu: tipe & ukuran (samakan backend file-guard: maks 4.2MB)
     if (!isSupportedFile(file)) {
       failPreview("", file.name, "Format file harus JPG, PNG, WEBP, atau PDF.");
       return;
     }
-    if (file.size > 4_200_000) {
-      failPreview("", file.name, "Ukuran file melebihi 4MB (batas server). Kompres/kecilkan foto lalu unggah ulang.");
-      return;
-    }
 
     const myScanId = ++scanIdRef.current;
-    const reader = new FileReader();
-    reader.onerror = () => {
-      if (myScanId !== scanIdRef.current) return;
-      failPreview("", file.name, "Gagal membaca file di perangkat. Coba file lain atau ulangi.");
-    };
-    reader.onload = async () => {
-      if (myScanId !== scanIdRef.current) return;
-      const base64 = reader.result as string;
-      setIsScanning(true);
-      setScanProgress(25);
-      setScanStepText("1/3 Memindai berkas kependudukan warga...");
+    setIsScanning(true);
+    setIsScanned(false);
+    setScanProgress(0);
+    setScanStepText("Menyiapkan halaman dokumen...");
+    setPageResults([]);
+    setSelectedPageIndex(0);
+    setMainPageIndex(0);
+    clearStepTimeout();
 
-      clearStepTimeout();
-      stepTimeoutRef.current = setTimeout(() => {
-        if (myScanId !== scanIdRef.current) return;
-        setScanProgress(65);
-        setScanStepText("2/3 Menjalankan OCR Gemini Vision & validasi NIK 16 digit...");
-      }, 500);
-
+    void (async () => {
+      let prepared: PreparedOcrPage[];
       try {
-        // Anti-spam: siapkan token manusia untuk percobaan terakhir (tanpa login).
-        const siteKey = getTurnstileSiteKey();
-        const q = getQuotaState();
-        let turnstileToken: string | null = null;
-        if (siteKey && q.remaining <= 1) {
-          setScanStepText("Memverifikasi manusia (captcha)...");
-          turnstileToken = await getTurnstileToken(siteKey);
-        }
-        const buildBody = () =>
-          JSON.stringify({
-            imageBase64: base64,
-            startedAt: PAGE_STARTED_AT,
-            website_confirm: "",
-            ...(turnstileToken ? { turnstileToken } : {}),
-          });
-        // POST dengan timeout 60 dtk agar "fetch failed" tidak gantung.
-        const postOnce = (url: string): Promise<Response> => {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 60_000);
-          return fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: buildBody(),
-            signal: ctrl.signal,
-          }).finally(() => clearTimeout(timer));
-        };
-        // Satu percobaan penuh: POST -> fallback (404 saja) -> captcha 403.
-        // Fallback untuk 502 TRANSIENT sengaja DIMATIKAN (1 klik = 1 AI-call).
-        const doAttempt = async (): Promise<Response> => {
-          let response: Response;
-          try {
-            response = await postOnce("/api/ocr");
-          } catch {
-            response = await postOnce("/api/scan-document");
-          }
-          if (myScanId !== scanIdRef.current) return response;
-          if (response.status === 404) {
-            try {
-              const alt = await postOnce("/api/scan-document");
-              if (myScanId !== scanIdRef.current) return response;
-              response = alt;
-            } catch {
-              // pertahankan respons awal
-            }
-          }
-          if (response.status === 403) {
-            const err0 = await readErrorJson(response);
-            if (err0.captchaRequired) {
-              if (myScanId !== scanIdRef.current) return response;
-              setScanStepText("Memverifikasi manusia (captcha)...");
-              turnstileToken = await getTurnstileToken(siteKey);
-              if (myScanId !== scanIdRef.current) return response;
-              if (turnstileToken) {
-                try {
-                  response = await postOnce("/api/ocr");
-                } catch {
-                  response = await postOnce("/api/scan-document");
-                }
-                if (myScanId !== scanIdRef.current) return response;
-              } else {
-                throw new Error(
-                  "Verifikasi manusia diperlukan untuk pemindaian terakhir dan captcha gagal dimuat. Periksa koneksi lalu pindai ulang, atau lanjut via Isi Manual di bawah."
-                );
-              }
-            }
-          }
-          return response;
-        };
-        const ensureOkOrRetry = async (attempt: 0 | 1): Promise<Response> => {
-          const response = await doAttempt();
-          if (myScanId !== scanIdRef.current) return response;
-          if (response.ok) return response;
-          const err = await readErrorJson(response);
-          if (isTransientAiError(err, response.status) && attempt === 0) {
-            const waitSec = transientRetrySec(err.subcode, err.retryAfter);
-            for (let left = waitSec; left > 0; left--) {
-              if (myScanId !== scanIdRef.current) return response;
-              setScanStepText(
-                `Layanan AI sibuk — mencoba otomatis dalam ${left} dtk (percobaan 2/2)...`
-              );
-              await new Promise((r) => setTimeout(r, 1000));
-            }
-            if (myScanId !== scanIdRef.current) return response;
-            setScanStepText("2/3 Menjalankan OCR Gemini Vision & validasi NIK 16 digit...");
-            return ensureOkOrRetry(1);
-          }
-          if (!isQuotaFreeCode(err.code)) {
-            recordScanAttempt();
-            setQuotaTick((t) => t + 1);
-          }
-          // System-error / transient TIDAK set cooldown 30 dtk (bisa retry cepat;
-          // spam tetap dibatasi rate-limit server).
-          if (!isTransientAiError(err, response.status)) {
-            setCooldown();
-          }
-          let msg = err.message;
-          if (response.status === 429 && err.retryAfter > 0) {
-            msg += ` Coba lagi dalam ${formatCountdown(err.retryAfter)}.`;
-          } else if (isTransientAiError(err, response.status)) {
-            const waitSec = transientRetrySec(err.subcode, err.retryAfter);
-            msg += ` Akan dicoba otomatis 1x dalam ~${waitSec} dtk; bila masih sibuk, tekan Coba Pindai Ulang atau Lanjut Isi Manual.`;
-          }
-          throw new Error(msg);
-        };
-        let response = await ensureOkOrRetry(0);
-        if (myScanId !== scanIdRef.current) return;
-        const data = await response.json();
-        if (myScanId !== scanIdRef.current) return;
-        clearStepTimeout();
-        setScanProgress(100);
-
-        // Gangguan sistem yang dikembalikan sebagai 200 + flag: tampilkan jujur, bukan vonis invalid
-        // (tanpa bakar cooldown — boleh retry cepat; spam tetap dibatasi server).
-        const parsedRes = data.data || data;
-        const sysErr =
-          Boolean((data as any)?.isSystemError) ||
-          Boolean(parsedRes?.isSystemError) ||
-          /belum dikonfigurasi|gagal memproses|jawaban tak valid|gangguan|kunci akses|sedang sibuk|verifikasi manual|coba lagi nanti|hubungi petugas loket/i.test(
-            String((data as any)?.message || parsedRes?.catatan || "")
-          );
-        if (sysErr) {
-          throw new Error(
-            String((data as any)?.message || "Layanan AI gagal memproses foto. Coba lagi dengan foto lebih jelas.")
-          );
-        }
-        recordScanAttempt();
-        setQuotaTick((t) => t + 1);
-        setCooldown();
-        const jenis = normalizeJenis(parsedRes.jenis_dokumen);
-        let status = normalizeStatus(parsedRes.status_verifikasi);
-        // Konsistensi silang: LAINNYA pasti TIDAK_VALID
-        if (jenis === "LAINNYA") status = "TIDAK_VALID";
-        const tidakValid = status === "TIDAK_VALID" || jenis === "LAINNYA";
-        const isLayak =
-          !tidakValid &&
-          (status === "BERHASIL" || parsedRes.status_kualitas === "LAYAK");
-        const score = tidakValid
-          ? (typeof parsedRes.skor_kejelasan === "number" ? Math.min(parsedRes.skor_kejelasan, 20) : 0)
-          : typeof parsedRes.skor_kejelasan === "number"
-            ? parsedRes.skor_kejelasan
-            : isLayak
-              ? 92
-              : 45;
-
-        const nikFull: string | null =
-          !tidakValid && typeof parsedRes.nik === "string" && /^\d{16}$/.test(parsedRes.nik.replace(/\D/g, ""))
-            ? parsedRes.nik.replace(/\D/g, "")
-            : null;
-        const nikPartial: string | null =
-          !tidakValid && !nikFull && typeof parsedRes.nik_partial === "string"
-            ? parsedRes.nik_partial.replace(/\D/g, "")
-            : null;
-        const namaOk: string | null =
-          !tidakValid && typeof parsedRes.nama === "string" && parsedRes.nama.trim() && !/tidak terbaca/i.test(parsedRes.nama)
-            ? parsedRes.nama.trim()
-            : null;
-
-        setPreviewResult({
-          imageBase64: base64,
-          imageName: file.name,
-          status_kelayakan: isLayak ? "LAYAK" : "TIDAK_LAYAK",
-          skor_kejelasan: score,
-          status_kejelasan: tidakValid ? "DITOLAK" : isLayak ? "LULUS" : "KURANG_TAJAM",
-          nik_terdeteksi: nikFull !== null,
-          nik_value: tidakValid
-            ? "Tidak Terdeteksi"
-            : nikFull || (nikPartial ? `${nikPartial} (sebagian)` : "Tidak Terdeteksi"),
-          nama_terdeteksi: namaOk || "Tidak Terbaca",
-          pencahayaan_status: isLayak ? "SESUAI_STANDAR" : "KURANG_TERANG",
-          catatan: composeAlasan({
-            jenis,
-            skor: score,
-            nikFull,
-            nikPartial,
-            nama: namaOk,
-            saranAi: tidakValid ? "" : String(parsedRes.catatan || ""),
-            tidakValid,
-            isLayak,
-          }),
-          jenis_dokumen: jenis,
-          status_verifikasi: status,
-          isSystemError: false,
-          blur_areas: tidakValid ? [] : normalizeBlurAreas(parsedRes.blur_areas),
-        });
-        if (myScanId !== scanIdRef.current) return;
-        setIsScanning(false);
-        setIsScanned(true);
+        prepared = await prepareOcrPages(file);
       } catch (err: any) {
         if (myScanId !== scanIdRef.current) return;
-        clearStepTimeout();
-        setScanProgress(100);
-        // Pesan jaringan mentah (Inggris) diterjemahkan agar warga paham
-        const rawMsg = String(err?.message || "");
-        let friendlyMsg = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMsg)
-          ? "Gagal menghubungi server OCR. Periksa koneksi internet lalu pindai ulang foto dokumen asli."
-          : rawMsg || "Gagal menghubungi server OCR. Periksa koneksi lalu pindai ulang foto dokumen asli.";
-        // Tegaskan bila ini masalah server (kunci API / AI sibuk): bukan salah foto warga.
-        if (isAiSystemErrorMessage(friendlyMsg) && !/bukan salah foto anda/i.test(friendlyMsg)) {
-          friendlyMsg += " Bukan salah foto Anda.";
-        }
-        // Fallback offline: file yang JELAS bukan dokumen kependudukan dari
-        // nama berkasnya tetap divonis TIDAK_VALID (berlabel demo) meski AI mati.
-        // Contoh: "Infografis Taman Siswa.jpg" -> bukan KTP, tanpa perlu AI.
-        if (isAiSystemErrorMessage(friendlyMsg) && looksLikeNonDukcapilByName(file.name)) {
-          const dims = await getImageDimensions(base64);
-          const dimInfo = dims ? ` Dimensi gambar ${dims.w}x${dims.h}px.` : "";
+        failPreview("", file.name, err?.message || "Gagal membaca file di perangkat.");
+        return;
+      }
+      if (myScanId !== scanIdRef.current) return;
+      if (!prepared.length) {
+        failPreview("", file.name, "Tidak ada halaman yang bisa dipindai.");
+        return;
+      }
+
+      const total = prepared.length;
+      const quotaNow = getQuotaState();
+      if (quotaNow.remaining > 0 && quotaNow.remaining < total) {
+        setScanStepText(
+          `PDF ${total} halaman, sisa kuota ${quotaNow.remaining}. Pindaian mungkin terhenti — hasil halaman yang selesai tetap ditampilkan.`
+        );
+        await new Promise((r) => setTimeout(r, 700));
+      } else {
+        setScanStepText(
+          total > 1
+            ? `PDF ${total} halaman — setiap halaman dipindai terpisah (${total} kuota OCR).`
+            : "Memindai dokumen..."
+        );
+      }
+
+      const collected: PreScreenPage[] = [];
+      let stopped = false;
+
+      for (let i = 0; i < total; i++) {
+        if (myScanId !== scanIdRef.current) return;
+        const page = prepared[i];
+        const pageLabel = total > 1 ? `Halaman ${i + 1}/${total}` : "Dokumen";
+        setScanProgress(Math.round((i / total) * 100));
+        setScanStepText(`${pageLabel}: menjalankan OCR...`);
+
+        try {
+          const data = await requestPageOcr(page.imageBase64, pageLabel, myScanId);
           if (myScanId !== scanIdRef.current) return;
-          setPreviewResult({
-            imageBase64: base64,
-            imageName: file.name,
-            status_kelayakan: "TIDAK_LAYAK",
-            skor_kejelasan: 10,
-            status_kejelasan: "DITOLAK",
-            nik_terdeteksi: false,
-            nik_value: "Tidak Terdeteksi",
-            nama_terdeteksi: "Tidak Terbaca",
-            pencahayaan_status: "KURANG_TERANG",
-            catatan:
-              `${BUKAN_KTP_MESSAGE} (Penilaian offline sementara — Layanan AI sedang gangguan, ` +
-              `jadi file dinilai dari nama & bentuk berkas.${dimInfo} ` +
-              `Untuk kepastian, pindai ulang foto dokumen kependudukan asli saat layanan pulih.)`,
-            jenis_dokumen: "LAINNYA",
-            status_verifikasi: "TIDAK_VALID",
-            isSystemError: false,
-            isOfflineDemo: true,
-          });
-          setIsScanning(false);
-          setIsScanned(true);
-          return;
+          const parsed = parseOcrPageResponse(data, page.imageBase64, page.imageName);
+          collected.push(makePreScreenPage(page, parsed.result));
+          setPageResults([...collected]);
+        } catch (err: any) {
+          if (myScanId !== scanIdRef.current) return;
+          const rawMsg = String(err?.message || "Gagal memindai halaman.");
+          const message = friendlyOcrError(rawMsg);
+          const parsedErr = parseOcrPageResponse(
+            { isSystemError: true, message },
+            page.imageBase64,
+            page.imageName
+          );
+          collected.push(makePreScreenPage(page, parsedErr.result));
+          setPageResults([...collected]);
+          stopped = err instanceof PageOcrError ? err.stopScan : true;
         }
-        // Gangguan sistem/koneksi murni: tandai isSystemError agar banner
-        // TIDAK memvonis "bukan KTP". Metrik dikosongkan (skor 0 + status
-        // DITOLAK hanya untuk internal; tampilan memakai "–").
-        setPreviewResult({
-          imageBase64: base64,
-          imageName: file.name,
+
+        if (stopped) {
+          // Pindaian berhenti karena kuota/rate limit/jaringan/AI. Sisa halaman
+          // tetap ditampilkan sebagai "belum dipindai" agar warga tahu ada
+          // halaman yang belum diperiksa — bukan seolah-olah PDF hanya segitu.
+          if (i < total - 1) {
+            for (let j = i + 1; j < total; j++) {
+              const remaining = prepared[j];
+              const parsedSkipped = parseOcrPageResponse(
+                {
+                  isSystemError: true,
+                  message: `Halaman ${j + 1} belum dipindai karena pemindaian halaman sebelumnya terhenti (kuota, jaringan, atau layanan AI). Pindai ulang atau lanjut isi manual.`,
+                },
+                remaining.imageBase64,
+                remaining.imageName
+              );
+              collected.push(makePreScreenPage(remaining, parsedSkipped.result));
+            }
+            setPageResults([...collected]);
+          }
+          break;
+        }
+      }
+
+      if (myScanId !== scanIdRef.current) return;
+      clearStepTimeout();
+      setScanProgress(100);
+
+      // Fallback offline: file yang JELAS bukan dokumen kependudukan dari
+      // nama berkasnya tetap divonis TIDAK_VALID meski AI mati.
+      const hasUsable = collected.some(
+        (p) =>
+          !p.result.isSystemError &&
+          p.result.jenis_dokumen !== "LAINNYA" &&
+          p.result.status_verifikasi !== "TIDAK_VALID"
+      );
+      if (
+        !hasUsable &&
+        collected.length === 1 &&
+        collected[0].result.isSystemError &&
+        looksLikeNonDukcapilByName(file.name)
+      ) {
+        const dims = await getImageDimensions(collected[0].imageBase64);
+        if (myScanId !== scanIdRef.current) return;
+        const dimInfo = dims ? ` Dimensi gambar ${dims.w}x${dims.h}px.` : "";
+        const offlineResult: OcrPreScreenResult = {
+          ...collected[0].result,
           status_kelayakan: "TIDAK_LAYAK",
-          skor_kejelasan: 0,
+          skor_kejelasan: 10,
           status_kejelasan: "DITOLAK",
           nik_terdeteksi: false,
           nik_value: "Tidak Terdeteksi",
           nama_terdeteksi: "Tidak Terbaca",
           pencahayaan_status: "KURANG_TERANG",
-          catatan: friendlyMsg,
+          catatan:
+            `${BUKAN_KTP_MESSAGE} (Penilaian offline sementara — Layanan AI sedang gangguan, ` +
+            `jadi file dinilai dari nama & bentuk berkas.${dimInfo} ` +
+            `Untuk kepastian, pindai ulang foto dokumen kependudukan asli saat layanan pulih.)`,
           jenis_dokumen: "LAINNYA",
           status_verifikasi: "TIDAK_VALID",
-          isSystemError: true,
-        });
-        setIsScanning(false);
-        setIsScanned(true);
+          isSystemError: false,
+          isOfflineDemo: true,
+          blur_areas: [],
+        };
+        collected[0] = makePreScreenPage(prepared[0], offlineResult);
+        setPageResults([...collected]);
       }
-    };
-    reader.readAsDataURL(file);
-  };
 
+      const finalMain = pickDefaultMainIndex(collected);
+      setPageResults([...collected]);
+      setMainPageIndex(finalMain);
+      setSelectedPageIndex(finalMain);
+      setCooldown();
+      setIsScanning(false);
+      setIsScanned(true);
+    })();
+  };
   const handleCustomFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -570,55 +539,68 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
     setIsScanning(false);
     setScanProgress(0);
     setScanStepText("Memulai analisis dokumen...");
-    setPreviewResult(INITIAL_RESULT);
+    setPageResults([]);
+    setSelectedPageIndex(0);
+    setMainPageIndex(0);
     setIsModalOpen(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
+  const mainPage = pageResults[mainPageIndex] || pageResults[0] || null;
+  const mainIsUsable = isUsablePage(mainPage || undefined);
+  // "Layak" mengikuti status AI sebenarnya (BURAM tetap dihitung perlu diperiksa),
+  // bukan sekadar "halaman bisa dipetakan" seperti isUsablePage.
+  const layakPageCount = pageResults.filter(
+    (page) => !page.result.isSystemError && page.result.status_verifikasi === "BERHASIL"
+  ).length;
+  const hasSystemErrorPage = pageResults.some((p) => p.result.isSystemError === true);
+  const identitySummary = summarizeIdentities(pageResults);
+  const summarySpeech = buildPreScreenSummarySpeech({
+    pages: pageResults.map((page) => ({
+      pageNumber: page.pageNumber,
+      jenis: page.result.jenis_dokumen,
+      statusVerifikasi: page.result.status_verifikasi,
+      statusKelayakan: page.result.status_kelayakan,
+      skor: page.result.skor_kejelasan,
+      isSystemError: page.result.isSystemError,
+    })),
+    mainPageIndex,
+    identityConflict: identitySummary.hasConflict,
+  });
+
+  const handleSelectPage = (index: number) => {
+    if (!pageResults[index]) return;
+    setSelectedPageIndex(index);
+  };
+
+  const handleSetMainPage = (index: number) => {
+    if (!isUsablePage(pageResults[index])) return;
+    setMainPageIndex(index);
+    setSelectedPageIndex(index);
+  };
+
   const handleProceed = () => {
-    if (!previewResult) return;
-    // Hanya file BUKAN kependudukan yang diblokir total.
-    // Dokumen valid (LAYAK maupun BURAM/KURANG_TAJAM) boleh lanjut → QR terbit di wizard.
-    // Gangguan sistem juga diblokir (bukan vonis invalid, tapi belum ada bukti scan valid).
-    if (
-      previewResult.isSystemError ||
-      previewResult.status_verifikasi === "TIDAK_VALID" ||
-      previewResult.jenis_dokumen === "LAINNYA"
-    ) {
-      return;
-    }
-    const jenisLanjut = String(previewResult.jenis_dokumen || "LAINNYA");
-    // Convert OcrPreScreenResult to VerificationResult for wizard
-    const verificationResult: VerificationResult = {
-      nik: previewResult.nik_value?.replace(/\D/g, "") || "",
-      nama: previewResult.nama_terdeteksi || "",
-      jenis_dokumen: previewResult.jenis_dokumen || "LAINNYA",
-      status_kualitas: previewResult.status_verifikasi === "BERHASIL" ? "LULUS" : "GAGAL",
-      skor: previewResult.skor_kejelasan,
-      catatan: previewResult.catatan || "",
-      source: "pre-screen",
-      blur_areas: previewResult.blur_areas,
-    };
+    if (!mainPage || !mainIsUsable) return;
+    const r = mainPage.result;
+    const jenisLanjut = String(r.jenis_dokumen || "LAINNYA");
+    // Akta kematian: NIK/nama milik almarhum, BUKAN pemohon. Hanya referensi.
+    const autoFillPemohon = jenisLanjut !== "AKTA_KEMATIAN";
     onProceedToWizard({
       // Hanya KTP yang otomatis memilih layanan KTP-EL. KK/Akta diteruskan
-      // apa adanya agar user memilih urusan yang sesuai di wizard (dengan
-      // chip info dokumen), bukan dipaksa masuk layanan KTP.
+      // apa adanya agar user memilih urusan yang sesuai di wizard.
       ...(jenisLanjut === "KTP" ? { service: "Penerbitan KTP-EL Baru / Penggantian" } : {}),
-      // Hanya NIK 16 digit utuh yang diteruskan — NIK parsial ("(sebagian)") JANGAN
-      // diloloskan agar wizard tidak menolak dengan alert dan user tidak mentok.
-      nik: previewResult.nik_terdeteksi && /^\d{16}$/.test(previewResult.nik_value?.replace(/\D/g, "") || "")
-        ? previewResult.nik_value.replace(/\D/g, "")
-        : "",
-      nama: previewResult.nama_terdeteksi && !previewResult.nama_terdeteksi.includes("Tidak")
-        ? previewResult.nama_terdeteksi
-        : "",
-      imageBase64: previewResult.imageBase64,
-      imageName: previewResult.imageName,
-      preScreenScore: previewResult.skor_kejelasan,
+      // Gunakan hasil normalisasi: hanya NIK 16 digit utuh yang diteruskan.
+      nik: autoFillPemohon ? mainPage.verification.nik || "" : "",
+      nama: autoFillPemohon ? mainPage.verification.nama || "" : "",
+      imageBase64: mainPage.imageBase64,
+      imageName: mainPage.imageName,
+      preScreenScore: r.skor_kejelasan,
       jenisDokumen: jenisLanjut,
-      verificationResult,
+      verificationResult: mainPage.verification,
+      pages: pageResults,
+      mainPageIndex,
     });
   };
 
@@ -626,14 +608,17 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
   // (NIK + nama diketik sendiri dari fisik dokumen). Bukan vonis invalid,
   // jadi wizard dibuka dengan data kosong + foto terlampir untuk verifikasi loket.
   const handleProceedManual = () => {
-    if (!previewResult) return;
+    const page = pageResults[mainPageIndex] || pageResults[0];
+    if (!page) return;
     onProceedToWizard({
       nik: "",
       nama: "",
-      imageBase64: previewResult.imageBase64,
-      imageName: previewResult.imageName,
+      imageBase64: page.imageBase64,
+      imageName: page.imageName,
       preScreenScore: 0,
       jenisDokumen: "LAINNYA",
+      pages: pageResults,
+      mainPageIndex,
     });
   };
 
@@ -815,6 +800,126 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
             transition={{ duration: 0.3 }}
             className="space-y-5"
           >
+            {/* 0. RINGKASAN SEMUA HALAMAN (PDF multi-halaman) */}
+            {pageResults.length > 1 && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:p-4 space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-bold text-slate-900">
+                      {pageResults.length} halaman dipindai
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {layakPageCount} layak • {pageResults.length - layakPageCount} perlu diperiksa
+                      {mainPage ? ` • Dokumen utama: Halaman ${mainPage.pageNumber} (${jenisLabel(mainPage.result.jenis_dokumen)})` : ""}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <SpeakResultButton
+                      text={summarySpeech}
+                      autoPlay
+                      autoPlayKey={pageResults}
+                      idleLabel="Bacakan Ringkasan"
+                    />
+                    <span className="text-[10px] font-mono text-slate-500 bg-white border border-slate-200 rounded-md px-2 py-1">
+                      PDF → {pageResults.length} halaman
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {pageResults.map((page, i) => {
+                    const usable = isUsablePage(page);
+                    const active = i === selectedPageIndex;
+                    const isMain = i === mainPageIndex;
+                    const p = page.result;
+                    return (
+                      <button
+                        key={`page-card-${page.pageIndex}-${i}`}
+                        type="button"
+                        onClick={() => handleSelectPage(i)}
+                        className={`text-left rounded-xl border p-2.5 transition cursor-pointer ${
+                          active
+                            ? "bg-white border-blue-500 ring-2 ring-blue-100"
+                            : "bg-white border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-mono font-bold text-slate-500">
+                            HALAMAN {page.pageNumber}
+                          </span>
+                          {isMain && (
+                            <span className="text-[9px] font-bold uppercase tracking-wide text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
+                              Utama
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-bold text-slate-900 mt-1 truncate">
+                          {p.isSystemError ? "Gagal dipindai" : jenisLabel(p.jenis_dokumen)}
+                        </p>
+                        <div className="flex items-center justify-between gap-2 mt-1">
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                              p.isSystemError
+                                ? "bg-slate-100 text-slate-600"
+                                : usable
+                                  ? p.status_verifikasi === "BERHASIL"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : "bg-amber-50 text-amber-700"
+                                  : "bg-red-50 text-red-700"
+                            }`}
+                          >
+                            {p.isSystemError ? "SISTEM" : p.status_verifikasi || "–"}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500">
+                            {p.isSystemError ? "–" : `${p.skor_kejelasan}/100`}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 truncate mt-1">{page.imageName}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedPageIndex !== mainPageIndex && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white border border-slate-200 p-2.5">
+                    <span className="text-[11px] text-slate-600">
+                      Halaman {pageResults[selectedPageIndex]?.pageNumber || "-"} sedang dilihat.
+                    </span>
+                    {isUsablePage(pageResults[selectedPageIndex]) ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSetMainPage(selectedPageIndex)}
+                        className="text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-md min-h-9 px-3 py-1.5 hover:bg-blue-100 transition cursor-pointer"
+                      >
+                        Jadikan dokumen utama
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-amber-700">
+                        Halaman ini tidak bisa dijadikan dokumen utama.
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {identitySummary.hasConflict && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-relaxed text-amber-900">
+                    <b>Data pemilik dokumen berbeda.</b> NIK/nama yang dipakai adalah dari dokumen
+                    utama
+                    {mainPage
+                      ? ` (Halaman ${mainPage.pageNumber} — ${jenisLabel(mainPage.result.jenis_dokumen)})`
+                      : ""}
+                    . Pastikan dokumen utama memang milik pemohon.
+                  </div>
+                )}
+
+                {mainPage && mainPageIdentityNote(mainPage.result.jenis_dokumen) && (
+                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 text-[11px] leading-relaxed text-slate-600">
+                    {mainPageIdentityNote(mainPage.result.jenis_dokumen)}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 1. ALERT BANNER HASIL */}
             <div
               className={`rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border ${
@@ -936,23 +1041,25 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
               </div>
 
               <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                <SpeakResultButton
-                  text={buildPreScreenSpeech({
-                    isSystemError,
-                    isQuotaBlocked,
-                    isTidakValid,
-                    isLayak,
-                    skor: previewResult.skor_kejelasan,
-                    jenis: isSystemError ? undefined : jenisLabel(previewResult.jenis_dokumen),
-                    catatan: isSystemError ? undefined : previewResult.catatan,
-                  })}
-                  autoPlay={isLayak}
-                  autoPlayKey={previewResult}
-                />
+                {pageResults.length <= 1 && (
+                  <SpeakResultButton
+                    text={buildPreScreenSpeech({
+                      isSystemError,
+                      isQuotaBlocked,
+                      isTidakValid,
+                      isLayak,
+                      skor: previewResult.skor_kejelasan,
+                      jenis: isSystemError ? undefined : jenisLabel(previewResult.jenis_dokumen),
+                      catatan: isSystemError ? undefined : previewResult.catatan,
+                    })}
+                    autoPlay={isLayak}
+                    autoPlayKey={previewResult}
+                  />
+                )}
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(true)}
-                  className={`text-xs font-semibold bg-white px-3.5 py-2 rounded-lg transition flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer border ${
+                  className={`text-xs font-semibold bg-white min-h-9 px-3.5 py-2 rounded-lg transition flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer border ${
                     isSystemError
                       ? "text-slate-700 hover:bg-slate-100/50 border-slate-300"
                       : isTidakValid
@@ -1197,55 +1304,78 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
 
                 </div>
 
-                {/* TOMBOL AKSI — dokumen valid (layak/buram) selalu bisa lanjut ke QR */}
+                {/* TOMBOL AKSI — status tombol mengikuti DOKUMEN UTAMA, bukan
+                    halaman yang sedang dilihat. Halaman lain bisa saja invalid
+                    tanpa memblokir lanjut. */}
+                {mainPage && selectedPageIndex !== mainPageIndex && (
+                  <p className="text-[11px] leading-relaxed text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                    Anda sedang melihat Halaman {pageResults[selectedPageIndex]?.pageNumber || "-"}. Tombol di
+                    bawah memakai <b className="text-slate-700">dokumen utama</b>: Halaman {mainPage.pageNumber} —{" "}
+                    {jenisLabel(mainPage.result.jenis_dokumen)}.
+                  </p>
+                )}
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                  {isSystemError ? (
+                  {mainIsUsable ? (
+                    <button
+                      type="button"
+                      onClick={handleProceed}
+                      className={`flex-1 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer ${
+                        mainPage?.result.status_kelayakan === "LAYAK"
+                          ? "bg-blue-600 hover:bg-blue-700 active:bg-blue-800"
+                          : "bg-amber-500 hover:bg-amber-600 active:bg-amber-700"
+                      }`}
+                    >
+                      {mainPage?.result.status_kelayakan === "LAYAK" ? (
+                        <>
+                          <span>Lanjut ke Formulir dengan Data Ini</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      ) : (
+                        <>
+                          <ArrowRight className="w-4 h-4" />
+                          <span>Dokumen Utama Valid (Buram) — Tetap Lanjut ke QR</span>
+                        </>
+                      )}
+                    </button>
+                  ) : (
                     <>
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        title={isQuotaBlocked ? "Kuota masih habis — pindaian akan ditolak lagi sampai reset. Gunakan Lanjut Isi Manual." : undefined}
-                        className="flex-1 bg-slate-600 hover:bg-slate-700 active:bg-slate-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
+                        title={
+                          hasSystemErrorPage && isQuotaBlocked
+                            ? "Kuota masih habis — pindaian akan ditolak lagi sampai reset. Gunakan Lanjut Isi Manual."
+                            : undefined
+                        }
+                        className={`flex-1 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer ${
+                          hasSystemErrorPage
+                            ? "bg-slate-600 hover:bg-slate-700 active:bg-slate-800"
+                            : "bg-red-500 hover:bg-red-600 active:bg-red-700"
+                        }`}
                       >
-                        <RefreshCw className="w-4 h-4" />
-                        <span>{isQuotaBlocked ? "Coba Lagi Nanti (Kuota Habis)" : "Coba Pindai Ulang"}</span>
+                        {hasSystemErrorPage ? (
+                          <>
+                            <RefreshCw className="w-4 h-4" />
+                            <span>{isQuotaBlocked ? "Coba Lagi Nanti (Kuota Habis)" : "Coba Pindai Ulang"}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-4 h-4" />
+                            <span>Unggah Ulang Foto Dokumen Asli</span>
+                          </>
+                        )}
                       </button>
-                      <button
-                        type="button"
-                        onClick={handleProceedManual}
-                        className="flex-1 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <ArrowRight className="w-4 h-4" />
-                        <span>Lanjut Isi Manual (Tanpa Skor AI)</span>
-                      </button>
+                      {hasSystemErrorPage && (
+                        <button
+                          type="button"
+                          onClick={handleProceedManual}
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <ArrowRight className="w-4 h-4" />
+                          <span>Lanjut Isi Manual (Tanpa Skor AI)</span>
+                        </button>
+                      )}
                     </>
-                  ) : isLayak ? (
-                    <button
-                      type="button"
-                      onClick={handleProceed}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <span>Lanjut ke Formulir dengan Data Ini</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                  ) : isTidakValid ? (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex-1 bg-red-500 hover:bg-red-600 active:bg-red-700 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <Upload className="w-4 h-4" />
-                      <span>Unggah Ulang Foto Dokumen Asli</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleProceed}
-                      className="flex-1 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-semibold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs hover:shadow transition flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <ArrowRight className="w-4 h-4" />
-                      <span>Dokumen Valid (Buram) — Tetap Lanjut ke QR</span>
-                    </button>
                   )}
                   
                   <button

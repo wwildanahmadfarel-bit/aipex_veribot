@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import QRCode from "qrcode";
 import confetti from "canvas-confetti";
-import { Ticket, VerificationResult, PreScreenInitialData } from "../types";
+import { Ticket, VerificationResult, PreScreenInitialData, PreScreenPage } from "../types";
 import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
 import { AipexLogo } from "./AipexLogo";
 import { JENIS_NIK_OPSIONAL, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
@@ -18,6 +18,15 @@ import {
   type WizardDraft,
 } from "../lib/draftStore";
 import { PdfCombinedUpload, type CombinedPdfReadyPage } from "./PdfCombinedUpload";
+import {
+  assignmentsToUploads,
+  buildDefaultAssignments,
+  isUsablePage,
+  mainPageIdentityNote,
+  summarizeIdentities,
+  type PageAssignment,
+  type PageAssignments,
+} from "../lib/preScreenPages";
 import {
   PAGE_STARTED_AT,
   formatCountdown,
@@ -59,6 +68,14 @@ const formatDraftTime = (ts?: number): string => {
 
 const MAX_FILE_MB = 4;
 
+/** Syarat WAJIB untuk sebuah layanan (sumber: servicesData.ts). */
+const getRequiredDocsForService = (service: string) => {
+  const svc = catalogServices.find((s) => s.title === service);
+  const wajib = svc?.requirements.filter((r) => r.mandatory) || [];
+  if (wajib.length > 0) return wajib;
+  return [{ title: "Foto Dokumen Kependudukan", description: "Foto asli dokumen (JPG/PNG/WEBP).", mandatory: true }];
+};
+
 
 export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   initialService = "Penerbitan KTP-EL Baru / Penggantian",
@@ -81,6 +98,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   const [docImageBase64, setDocImageBase64] = useState<string | null>(null);
   const [docImageName, setDocImageName] = useState<string>("");
   const [supportFiles, setSupportFiles] = useState<{ base64: string; name: string }[]>([]);
+  // Halaman hasil pra-pemeriksaan OCR (PDF multi-halaman) + pemetaan ke slot syarat.
+  const [preScreenPages, setPreScreenPages] = useState<PreScreenPage[]>([]);
+  const [pageAssignments, setPageAssignments] = useState<PageAssignments>({});
 
   // Mode unggah: foto/PDF terpisah per slot, atau SATU PDF gabungan (dipecah di browser).
   const [uploadMode, setUploadMode] = useState<"individual" | "combined">("individual");
@@ -100,13 +120,164 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
   // Daftar berkas WAJIB mengikuti syarat layanan (badge WAJIB di katalog).
   // Sumber kebenaran tunggal: servicesData.ts — ubah di sana bila ketentuan berubah.
-  const requiredDocs = (() => {
-    const svc = catalogServices.find((s) => s.title === selectedService);
-    const wajib = svc?.requirements.filter((r) => r.mandatory) || [];
-    if (wajib.length > 0) return wajib;
-    return [{ title: "Foto Dokumen Kependudukan", description: "Foto asli dokumen (JPG/PNG/WEBP).", mandatory: true }];
-  })();
+  const requiredDocs = getRequiredDocsForService(selectedService);
   const supportDocs = requiredDocs.slice(1);
+
+  // ---------------------------------------------------------------------
+  // Pemetaan halaman OCR → slot syarat (dokumen utama + lampiran).
+  // ---------------------------------------------------------------------
+  const getMainIndexFromAssignments = (assignments: PageAssignments): number => {
+    const entry = Object.entries(assignments).find(([, a]) => a.kind === "main");
+    return entry ? Number(entry[0]) : -1;
+  };
+
+  const shouldAutoFillApplicant = (service: string, mainPage: PreScreenPage | null): boolean => {
+    if (!mainPage || !isUsablePage(mainPage)) return false;
+    // Akta kematian memuat data almarhum — jangan pernah dipakai sebagai pemohon.
+    if (/akta kematian/i.test(service)) return false;
+    if (normalizeJenis(mainPage.result.jenis_dokumen) === "AKTA_KEMATIAN") return false;
+    if (normalizeJenis(initialPreScreenData?.jenisDokumen) === "AKTA_KEMATIAN") return false;
+    return true;
+  };
+
+  /**
+   * Isi NIK/nama dari dokumen utama. Nilai yang sudah diketik manual TIDAK
+   * ditimpa, kecuali `force` (inisialisasi awal) atau masih sama dengan
+   * identitas dokumen utama sebelumnya.
+   */
+  const syncIdentityFromMainPage = (
+    nextMain: PreScreenPage | null,
+    prevMain: PreScreenPage | null,
+    service: string,
+    force = false
+  ) => {
+    const autoFill = shouldAutoFillApplicant(service, nextMain);
+    const nextNik = autoFill ? nextMain?.verification.nik || "" : "";
+    const nextNama = autoFill ? nextMain?.verification.nama || "" : "";
+    const prevNik = prevMain?.verification.nik || "";
+    const prevNama = prevMain?.verification.nama || "";
+    setNik((current) => (force || !current.trim() || current === prevNik ? nextNik : current));
+    setNama((current) => (force || !current.trim() || current === prevNama ? nextNama : current));
+  };
+
+  /** Tulis assignment ke state upload wizard (dokumen utama + supportFiles). */
+  const applyPreScreenAssignments = (
+    pages: PreScreenPage[],
+    requirements: ReturnType<typeof getRequiredDocsForService>,
+    assignments: PageAssignments,
+    service: string,
+    options: { prevMain?: PreScreenPage | null; forceIdentity?: boolean } = {}
+  ) => {
+    const { mainPage, supportFiles: mapped } = assignmentsToUploads(pages, requirements, assignments);
+    setPageAssignments(assignments);
+    setSupportFiles(mapped);
+    setUploadMode("individual");
+    setCombinedPages([]);
+    if (!mainPage) {
+      setDocImageBase64(null);
+      setDocImageName("");
+      setVerificationResult(null);
+      return;
+    }
+    setDocImageBase64(mainPage.imageBase64);
+    setDocImageName(mainPage.imageName);
+    setVerificationResult(isUsablePage(mainPage) ? mainPage.verification : null);
+    syncIdentityFromMainPage(mainPage, options.prevMain || null, service, options.forceIdentity === true);
+  };
+
+  /** Petakan ulang halaman saat layanan berganti — tanpa memindai ulang. */
+  const remapPreScreenForService = (
+    service: string,
+    options: { preferredMainIndex?: number; forceIdentity?: boolean; pages?: PreScreenPage[] } = {}
+  ) => {
+    const pages = options.pages || preScreenPages;
+    if (!pages.length) return;
+    const requirements = getRequiredDocsForService(service);
+    const prevMain = pages[getMainIndexFromAssignments(pageAssignments)] || null;
+    const { assignments } = buildDefaultAssignments(pages, requirements, options.preferredMainIndex);
+    applyPreScreenAssignments(pages, requirements, assignments, service, {
+      prevMain,
+      forceIdentity: options.forceIdentity,
+    });
+  };
+
+  /** Pengguna mengganti berkas manual → pemetaan otomatis dilepas. */
+  const detachPreScreenMapping = () => {
+    if (!preScreenPages.length && !Object.keys(pageAssignments).length) return;
+    setPreScreenPages([]);
+    setPageAssignments({});
+  };
+
+  const handleServiceChange = (nextService: string) => {
+    setSelectedService(nextService);
+    if (preScreenPages.length > 0) {
+      remapPreScreenForService(nextService);
+    } else {
+      // Perilaku lama: syarat berkas berubah → ulangi upload dari nol.
+      resetAllUploads();
+    }
+  };
+
+  /** Halaman valid terbaik selain `excludeIndex` untuk menggantikan dokumen utama. */
+  const pickFallbackMainIndex = (excludeIndex: number): number => {
+    const usable = preScreenPages
+      .map((page, index) => ({ page, index }))
+      .filter(({ page, index }) => index !== excludeIndex && isUsablePage(page));
+    if (!usable.length) return -1;
+    const ktp = usable
+      .filter(({ page }) => page.result.jenis_dokumen === "KTP")
+      .sort((a, b) => b.page.result.skor_kejelasan - a.page.result.skor_kejelasan)[0];
+    return (ktp || usable[0]).index;
+  };
+
+  /** Koreksi manual pemetaan halaman → dokumen utama / slot lampiran. */
+  const handleAssignmentChange = (pageIndex: number, value: string) => {
+    const page = preScreenPages[pageIndex];
+    if (!page) return;
+    if (value !== "unused" && !isUsablePage(page)) return;
+
+    const prevMainIndex = getMainIndexFromAssignments(pageAssignments);
+    const prevMain = preScreenPages[prevMainIndex] || null;
+    const next: PageAssignments = { ...pageAssignments };
+
+    const clearMain = () => {
+      for (const key of Object.keys(next)) {
+        if (next[Number(key)].kind === "main") next[Number(key)] = { kind: "unused" };
+      }
+    };
+    const clearSupportSlot = (slot: number) => {
+      for (const key of Object.keys(next)) {
+        const a = next[Number(key)];
+        if (a.kind === "support" && a.slot === slot) next[Number(key)] = { kind: "unused" };
+      }
+    };
+
+    if (value === "main") {
+      clearMain();
+      next[pageIndex] = { kind: "main" };
+    } else if (value.startsWith("support:")) {
+      const slot = Number(value.slice("support:".length));
+      if (!Number.isInteger(slot) || slot < 1 || slot >= requiredDocs.length) return;
+      if (prevMainIndex === pageIndex) {
+        const fallback = pickFallbackMainIndex(pageIndex);
+        if (fallback < 0) return; // jangan tinggalkan wizard tanpa dokumen utama
+        clearSupportSlot(slot);
+        next[fallback] = { kind: "main" };
+      } else {
+        clearSupportSlot(slot);
+      }
+      next[pageIndex] = { kind: "support", slot };
+    } else {
+      if (prevMainIndex === pageIndex) {
+        const fallback = pickFallbackMainIndex(pageIndex);
+        if (fallback < 0) return;
+        next[fallback] = { kind: "main" };
+      }
+      next[pageIndex] = { kind: "unused" };
+    }
+
+    applyPreScreenAssignments(preScreenPages, requiredDocs, next, selectedService, { prevMain });
+  };
 
   /** Reset seluruh file saat ganti jenis urusan (slot mengikuti syarat layanan baru). */
   const resetAllUploads = () => {
@@ -116,6 +287,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setCombinedPages([]);
     setUploadMode("individual");
     setVerificationResult(null); // Clear stale scan result when service changes
+    setPreScreenPages([]);
+    setPageAssignments({});
   };
 
   // Step 3: AI Scanner & Verification
@@ -142,26 +315,41 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
   // Pre-populate data from OCR pre-screening if available
   useEffect(() => {
-    if (initialPreScreenData) {
-      if (initialPreScreenData.service) {
-        setSelectedService(initialPreScreenData.service);
-      }
-      if (initialPreScreenData.nik) {
-        setNik(initialPreScreenData.nik);
-      }
-      if (initialPreScreenData.nama) {
-        setNama(initialPreScreenData.nama);
-      }
-      if (initialPreScreenData.imageBase64) {
-        setDocImageBase64(initialPreScreenData.imageBase64);
-        setDocImageName(initialPreScreenData.imageName || "e-KTP_Verifikasi_OCR.jpg");
-      }
-      // Prefill verification result but stay on Step 1 for WA/alamat input
-      // User must complete Step 1 & 2 validation before proceeding
-      if (initialPreScreenData.verificationResult) {
-        setVerificationResult(initialPreScreenData.verificationResult);
-      }
+    if (!initialPreScreenData) return;
+    const pages = initialPreScreenData.pages || [];
+    const effectiveService = initialPreScreenData.service || initialService;
+    setSelectedService(effectiveService);
+
+    if (pages.length > 0) {
+      // Multi-halaman: petakan semua halaman ke slot syarat layanan.
+      setPreScreenPages(pages);
+      remapPreScreenForService(effectiveService, {
+        preferredMainIndex: initialPreScreenData.mainPageIndex,
+        forceIdentity: true,
+        pages,
+      });
+      return;
     }
+
+    // Jalur lama satu berkas (tanpa array pages).
+    setPreScreenPages([]);
+    setPageAssignments({});
+    if (initialPreScreenData.nik) {
+      setNik(initialPreScreenData.nik);
+    }
+    if (initialPreScreenData.nama) {
+      setNama(initialPreScreenData.nama);
+    }
+    if (initialPreScreenData.imageBase64) {
+      setDocImageBase64(initialPreScreenData.imageBase64);
+      setDocImageName(initialPreScreenData.imageName || "e-KTP_Verifikasi_OCR.jpg");
+    }
+    // Prefill verification result but stay on Step 1 for WA/alamat input
+    // User must complete Step 1 & 2 validation before proceeding
+    if (initialPreScreenData.verificationResult) {
+      setVerificationResult(initialPreScreenData.verificationResult);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPreScreenData]);
 
   // ---------------------------------------------------------------------
@@ -192,6 +380,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setSupportFiles(draft.supportFiles || []);
     setUploadMode(draft.uploadMode || "individual");
     setCombinedPages(draft.combinedPdfPages || []);
+    setPreScreenPages([]);
+    setPageAssignments({});
     setVerificationResult(null);
     setGeneratedTicket(null);
     setDraftBanner(null);
@@ -382,6 +572,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       if (e.target) e.target.value = "";
       return;
     }
+    detachPreScreenMapping();
     setUploadMode("individual");
     setCombinedPages([]);
     setDocImageName(file.name);
@@ -404,6 +595,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       if (inputEl) inputEl.value = "";
       return;
     }
+    detachPreScreenMapping();
     const reader = new FileReader();
     reader.onload = () => {
       setSupportFiles((prev) => {
@@ -419,6 +611,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   };
 
   const removeSupportFile = (slot: number) => {
+    detachPreScreenMapping();
     // Pertahankan indeks slot (jangan filter) agar selaras dengan urutan syarat.
     setSupportFiles((prev) => {
       const next = [...prev];
@@ -430,6 +623,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   /** Hasil pecahan PDF gabungan → dokumen utama (slot 0) + lampiran slot 1..N. */
   const handlePdfPagesReady = (pages: CombinedPdfReadyPage[]) => {
     if (!pages.length) return;
+    detachPreScreenMapping();
     const mainSlotTitle = requiredDocs[0]?.title;
     const main = pages.find((p) => p.slotTitle === mainSlotTitle) || pages[0];
     const rest = pages.filter((p) => p !== main);
@@ -467,6 +661,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     setSupportFiles([]);
     setUploadMode("combined");
     setVerificationResult(null); // Clear stale scan result when PDF is removed
+    setPreScreenPages([]);
+    setPageAssignments({});
   };
 
   /** Judul syarat yang berkasnya BELUM diunggah (untuk pesan validasi). */
@@ -482,13 +678,18 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   // Step 1 Validation — NIK 16 digit angka + WA format Indonesia.
   // NIK OPSIONAL bila jenis dokumen sudah diketahui non-kartu dari pra-pemeriksaan
   // (akta kematian/perkawinan & surat pindah lama sering tidak mencantumkan NIK).
-  const jenisPraPindai = normalizeJenis(
-    initialPreScreenData?.jenisDokumen || verificationResult?.jenis_dokumen || ""
-  );
+  // verificationResult lebih dulu karena ikut berubah saat pemetaan halaman dikoreksi.
+  const praJenis = verificationResult?.jenis_dokumen || initialPreScreenData?.jenisDokumen || "";
+  const jenisPraPindai = normalizeJenis(praJenis);
+  const praIdentityNote = mainPageIdentityNote(praJenis);
   // Layanan yang dokumennya memang non-kartu (akta kematian/perkawinan & surat
   // pindah) → NIK opsional walau pra-pemeriksaan belum dijalankan.
   const layananNonKartu = /akta kematian|akta perkawinan|surat pindah/i.test(selectedService);
   const nikOpsional = JENIS_NIK_OPSIONAL.includes(jenisPraPindai) || layananNonKartu;
+  // Ringkasan pemetaan halaman (hanya untuk pra-pemeriksaan multi-halaman).
+  const mainAssignmentIndex = getMainIndexFromAssignments(pageAssignments);
+  const mainDocPage = preScreenPages[mainAssignmentIndex] || null;
+  const preScreenIdentity = summarizeIdentities(preScreenPages);
   const isValidWa = (v: string) => /^(08\d{8,12}|628\d{8,12}|\+628\d{8,12})$/.test(v.replace(/[\s-]/g, ""));
   const handleProceedToStep2 = () => {
     if (!nama.trim() || !wa.trim() || (!nikOpsional && !nik.trim())) {
@@ -831,7 +1032,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
         <button
           onClick={() => handleRequestExit("button")}
           type="button"
-          className="inline-flex items-center gap-1.5 text-brand hover:text-blue-800 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
+          className="inline-flex items-center gap-1.5 min-h-9 text-brand hover:text-blue-800 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
         >
           <span className="material-symbols-outlined text-[18px]">arrow_back</span>
           <span>Kembali ke Beranda</span>
@@ -854,7 +1055,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               onClick={discardDraft}
               title="Hapus draft yang tersimpan"
               aria-label="Hapus draft yang tersimpan"
-              className="w-7 h-7 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:text-red-600 hover:border-red-300 transition-colors cursor-pointer"
+              className="w-9 h-9 shrink-0 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:text-red-600 hover:border-red-300 transition-colors cursor-pointer"
             >
               <span className="material-symbols-outlined text-[15px]">delete</span>
             </button>
@@ -921,9 +1122,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
         </div>
 
         {/* 4-Step Stepper Bar */}
-        <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-1.5 grid grid-cols-2 md:grid-cols-4 gap-2 my-6">
+        <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-1.5 grid grid-cols-2 md:grid-cols-4 gap-1.5 sm:gap-2 my-6">
           <div
-            className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
+            className={`rounded-lg px-2.5 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 transition-all ${
               currentStep === 1
                 ? "bg-brand text-white shadow-xs"
                 : currentStep > 1
@@ -942,11 +1143,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             >
               {currentStep > 1 ? "✓" : "1"}
             </span>
-            <span className="truncate">1. Data Diri</span>
+            <span className="min-w-0 leading-tight">Data Diri</span>
           </div>
 
           <div
-            className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
+            className={`rounded-lg px-2.5 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 transition-all ${
               currentStep === 2
                 ? "bg-brand text-white shadow-xs"
                 : currentStep > 2
@@ -965,11 +1166,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             >
               {currentStep > 2 ? "✓" : "2"}
             </span>
-            <span className="truncate">2. Upload Berkas</span>
+            <span className="min-w-0 leading-tight">Upload Berkas</span>
           </div>
 
           <div
-            className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
+            className={`rounded-lg px-2.5 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 transition-all ${
               currentStep === 3
                 ? "bg-brand text-white shadow-xs"
                 : currentStep > 3
@@ -988,11 +1189,11 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             >
               {currentStep > 3 ? "✓" : "3"}
             </span>
-            <span className="truncate">3. Scanner AI</span>
+            <span className="min-w-0 leading-tight">Scanner AI</span>
           </div>
 
           <div
-            className={`rounded-lg px-3 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-2 transition-all ${
+            className={`rounded-lg px-2.5 sm:px-4 py-2.5 font-semibold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 transition-all ${
               currentStep === 4
                 ? "bg-brand text-white shadow-xs"
                 : "text-slate-400"
@@ -1005,7 +1206,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             >
               4
             </span>
-            <span className="truncate">4. Tiket QR</span>
+            <span className="min-w-0 leading-tight">Tiket QR</span>
           </div>
         </div>
 
@@ -1032,24 +1233,36 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
             </div>
 
             {/* Hasil pra-pemeriksaan yang terbawa (jenis dokumen + skor) */}
-            {initialPreScreenData && (initialPreScreenData.jenisDokumen || initialPreScreenData.imageBase64) && (
+            {initialPreScreenData && (praJenis || initialPreScreenData.imageBase64) && (
               <div className="bg-violet-50 border border-violet-200 rounded-xl p-4 flex items-start gap-3">
                 <span className="material-symbols-outlined text-violet-600 text-[22px] shrink-0 mt-0.5">
                   document_scanner
                 </span>
                 <div className="text-xs md:text-sm text-slate-700 leading-relaxed">
                   <strong className="text-slate-900 font-semibold">
-                    Hasil pra-pemeriksaan: {jenisLabel(initialPreScreenData.jenisDokumen)}
-                    {typeof initialPreScreenData.preScreenScore === "number"
-                      ? ` (skor ${initialPreScreenData.preScreenScore}/100)`
+                    Hasil pra-pemeriksaan: {jenisLabel(praJenis)}
+                    {typeof (verificationResult?.skor ?? initialPreScreenData.preScreenScore) === "number"
+                      ? ` (skor ${verificationResult?.skor ?? initialPreScreenData.preScreenScore}/100)`
                       : ""}
                   </strong>
-                  {initialPreScreenData.jenisDokumen && initialPreScreenData.jenisDokumen !== "KTP" && (
+                  {praJenis && praJenis !== "KTP" && (
                     <span className="block mt-0.5">
-                      Dokumen Anda terdeteksi sebagai {jenisLabel(initialPreScreenData.jenisDokumen)} — pastikan
+                      Dokumen utama terdeteksi sebagai {jenisLabel(praJenis)} — pastikan
                       pilihan <em>Jenis Urusan</em> di bawah sesuai dengan keperluan Anda (tidak harus layanan KTP).
                     </span>
                   )}
+                  {praIdentityNote && (
+                    <span className="block mt-1 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-amber-800">
+                      {praIdentityNote}
+                    </span>
+                  )}
+                  {normalizeJenis(initialPreScreenData.jenisDokumen) === "AKTA_KEMATIAN" &&
+                    praJenis !== "AKTA_KEMATIAN" && (
+                      <span className="block mt-1 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-amber-800">
+                        Dokumen awal adalah akta kematian. NIK/nama almarhum tidak diisikan otomatis sebagai
+                        pemohon — isi data pemohon (keluarga) secara manual.
+                      </span>
+                    )}
                   {(!initialPreScreenData.nik || !initialPreScreenData.nama) && (
                     <span className="block mt-0.5 text-amber-700">
                       Sebagian data tidak terbaca AI — lengkapi NIK/nama manual sesuai fisik dokumen.
@@ -1081,11 +1294,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 <div className="relative flex items-center">
                   <select
                     value={selectedService}
-                    onChange={(e) => {
-                      setSelectedService(e.target.value);
-                      // Syarat berkas mengikuti layanan → ulangi upload dari nol.
-                      resetAllUploads();
-                    }}
+                    onChange={(e) => handleServiceChange(e.target.value)}
                     className="w-full h-12 pl-4 pr-10 rounded-xl bg-slate-50 border border-slate-300 text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition-all outline-none appearance-none cursor-pointer"
                   >
                     <option value="Penerbitan KTP-EL Baru / Penggantian">
@@ -1252,6 +1461,138 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               </span>
             </div>
 
+            {/* Pemetaan halaman hasil OCR multi-halaman → slot syarat layanan */}
+            {preScreenPages.length > 1 && (
+              <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-3 sm:p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-violet-600 text-[20px]">account_tree</span>
+                      Pemetaan {preScreenPages.length} halaman dokumen
+                    </p>
+                    <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                      Setiap halaman sudah dikenali terpisah. Periksa pemetaan di bawah — Anda bisa
+                      mengubah dokumen utama atau memindahkan halaman ke lampiran yang sesuai.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => remapPreScreenForService(selectedService)}
+                    className="min-h-10 px-3 py-2 rounded-lg bg-white border border-violet-200 text-violet-700 text-[11px] font-semibold hover:bg-violet-100 transition-colors shrink-0 cursor-pointer"
+                  >
+                    Petakan Ulang Otomatis
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {preScreenPages.map((page, index) => {
+                    const assignment: PageAssignment = pageAssignments[index] || { kind: "unused" };
+                    const usable = isUsablePage(page);
+                    const value =
+                      assignment.kind === "main"
+                        ? "main"
+                        : assignment.kind === "support"
+                          ? `support:${assignment.slot}`
+                          : "unused";
+                    return (
+                      <div
+                        key={`prepage-${page.pageIndex}-${index}`}
+                        className={`flex flex-col sm:flex-row sm:items-center gap-2.5 rounded-xl border p-2.5 ${
+                          assignment.kind === "main"
+                            ? "bg-white border-blue-300 ring-1 ring-blue-100"
+                            : "bg-white border-slate-200"
+                        }`}
+                      >
+                        {isPdfDataUrl(page.imageBase64) ? (
+                          <span className="w-16 h-12 rounded-lg border border-slate-200 bg-slate-100 flex items-center justify-center shrink-0">
+                            <span className="material-symbols-outlined text-[24px] text-red-500">picture_as_pdf</span>
+                          </span>
+                        ) : (
+                          <img
+                            src={page.imageBase64}
+                            alt={`Halaman ${page.pageNumber}`}
+                            className="w-16 h-12 object-cover rounded-lg border border-slate-200 bg-white shrink-0"
+                          />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-bold text-slate-900">Halaman {page.pageNumber}</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                              {page.result.isSystemError ? "Gagal dipindai" : jenisLabel(page.result.jenis_dokumen)}
+                            </span>
+                            {assignment.kind === "main" && (
+                              <span className="text-[9px] font-bold uppercase tracking-wide text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
+                                Dokumen utama
+                              </span>
+                            )}
+                            <span
+                              className={`text-[10px] font-semibold ${
+                                !usable
+                                  ? "text-red-600"
+                                  : page.result.status_verifikasi === "BERHASIL"
+                                    ? "text-emerald-700"
+                                    : "text-amber-700"
+                              }`}
+                            >
+                              {page.result.isSystemError
+                                ? "gangguan sistem"
+                                : `${page.result.status_verifikasi} • ${page.result.skor_kejelasan}/100`}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 truncate mt-0.5">{page.imageName}</p>
+                        </div>
+                        <select
+                          value={value}
+                          disabled={!usable}
+                          onChange={(e) => handleAssignmentChange(index, e.target.value)}
+                          className="w-full sm:w-64 h-10 px-2 rounded-lg bg-slate-50 border border-slate-300 text-[11px] text-slate-800 focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="unused">Tidak dipakai</option>
+                          <option value="main">
+                            Dokumen utama — {requiredDocs[0]?.title}
+                          </option>
+                          {supportDocs.map((req, i) => (
+                            <option key={`assign-${i}`} value={`support:${i + 1}`}>
+                              Lampiran {i + 1} — {req.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="rounded-lg bg-white border border-slate-200 p-2.5 text-[11px] leading-relaxed text-slate-600">
+                  <b className="text-slate-900">Dokumen utama saat ini:</b>{" "}
+                  {mainDocPage
+                    ? `Halaman ${mainDocPage.pageNumber} — ${jenisLabel(mainDocPage.result.jenis_dokumen)}`
+                    : "belum dipilih"}
+                  . NIK/nama pemohon diisi otomatis dari dokumen utama dan bisa Anda ubah di Langkah 1.
+                </div>
+
+                {preScreenIdentity.hasConflict && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-relaxed text-amber-900">
+                    <b>Data pemilik dokumen berbeda antar halaman.</b> NIK/nama yang dipakai adalah
+                    dari dokumen utama. Pastikan dokumen utama memang milik pemohon; data KK/akta
+                    bisa milik kepala keluarga, anak, pasangan, atau almarhum.
+                  </div>
+                )}
+
+                {mainDocPage && mainPageIdentityNote(mainDocPage.result.jenis_dokumen) && (
+                  <div className="rounded-lg border border-amber-200 bg-white p-2.5 text-[11px] leading-relaxed text-amber-900">
+                    {mainPageIdentityNote(mainDocPage.result.jenis_dokumen)}
+                  </div>
+                )}
+
+                {normalizeJenis(initialPreScreenData?.jenisDokumen) === "AKTA_KEMATIAN" && (
+                  <div className="rounded-lg border border-slate-300 bg-white p-2.5 text-[11px] leading-relaxed text-slate-700">
+                    Dokumen awal adalah akta kematian. NIK/nama almarhum hanya menjadi referensi dan
+                    tidak diisikan otomatis sebagai pemohon — isi data pemohon secara manual.
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Mode unggah: terpisah per slot atau satu PDF gabungan */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-1.5 rounded-xl bg-slate-100 border border-slate-200">
               <button
@@ -1401,7 +1742,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                           setDocImageBase64(null);
                           setDocImageName("");
                         }}
-                        className="text-red-300 hover:text-red-100 flex items-center gap-1 cursor-pointer"
+                        className="min-h-10 px-2 -my-1 rounded-md text-red-300 hover:text-red-100 hover:bg-white/10 flex items-center gap-1 cursor-pointer"
+                        aria-label="Hapus dan ganti dokumen utama"
                       >
                         <span className="material-symbols-outlined text-[16px]">delete</span>
                         <span>Ganti</span>
@@ -1460,7 +1802,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       )}
                       <span className="text-xs font-semibold text-ink truncate flex-1">{f.name}</span>
                       <span className="text-xs text-emerald-700 font-semibold hidden sm:inline">Terunggah</span>
-                      <label className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-ink text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
+                      <label className="min-h-10 inline-flex items-center justify-center px-3 py-2 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-ink text-xs font-semibold shadow-2xs cursor-pointer shrink-0">
                         Ganti
                         <input
                           type="file"
@@ -1469,7 +1811,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                           onChange={(e) => handleSupportUpload(i, e.target.files?.[0], e.currentTarget)}
                         />
                       </label>
-                      <button type="button" onClick={() => removeSupportFile(i)} className="px-3 py-1.5 rounded-lg bg-white border border-red-200 hover:bg-red-50 text-red-700 text-xs font-semibold cursor-pointer shrink-0">
+                      <button type="button" onClick={() => removeSupportFile(i)} className="min-h-10 px-3 py-2 rounded-lg bg-white border border-red-200 hover:bg-red-50 text-red-700 text-xs font-semibold cursor-pointer shrink-0">
                         Hapus
                       </button>
                     </div>
