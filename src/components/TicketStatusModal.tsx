@@ -52,6 +52,11 @@ function timelineVisual(status: unknown): { icon: string; className: string } {
 
 export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, isOpen, onClose }) => {
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (ticket && qrCanvasRef.current) {
@@ -69,6 +74,47 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
       );
     }
   }, [ticket]);
+
+  // Escape menutup modal, Tab berputar di dalam dialog, fokus kembali ke pemicu.
+  useEffect(() => {
+    if (!isOpen) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    closeButtonRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusables = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((el) => el.offsetParent !== null);
+      if (focusables.length === 0) return;
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previousFocusRef.current?.focus?.();
+    };
+  }, [isOpen]);
 
   if (!isOpen || !ticket) return null;
 
@@ -94,6 +140,11 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
       <style>{`@media print { body * { visibility: hidden !important; } #ticketStatusPrintCard, #ticketStatusPrintCard * { visibility: visible !important; } #ticketStatusPrintCard { position: absolute !important; left: 0; top: 0; width: 100% !important; max-width: 100% !important; max-height: none !important; overflow: visible !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; } #ticketStatusPrintCard .no-print { display: none !important; } }`}</style>
       <div
         id="ticketStatusPrintCard"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ticket-status-title"
+        tabIndex={-1}
         className="bg-white max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl shadow-2xl animate-in zoom-in-95 duration-200 border border-slate-100"
         onClick={(e) => e.stopPropagation()}
       >
@@ -102,7 +153,7 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
           <div className="flex items-center gap-2.5">
             <span className="material-symbols-outlined text-[#2563eb] text-[24px]">verified</span>
             <div>
-              <h3 className="text-base font-bold text-slate-900 font-heading">
+              <h3 id="ticket-status-title" className="text-base font-bold text-slate-900 font-heading">
                 Status Berkas Mandiri
               </h3>
               <p className="font-code-num text-xs text-[#2563eb] font-semibold">
@@ -111,7 +162,9 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
             </div>
           </div>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
+            aria-label="Tutup status tiket"
             className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-slate-900 flex items-center justify-center transition-colors cursor-pointer shadow-2xs"
           >
             <span className="material-symbols-outlined text-[18px]">close</span>
