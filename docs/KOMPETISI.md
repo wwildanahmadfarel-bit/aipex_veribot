@@ -177,7 +177,7 @@ if (res.status === 404 || res.status >= 500)                         // cadangan
 |---|---|---|
 | `POST /api/ocr`, `POST /api/scan-document` | `api/ocr.ts`, `api/scan-document.ts` → `api/_lib/ocr-handler.ts` | Scan Vision + tiket otomatis |
 | `POST /api/chat-faq` | `api/chat-faq.ts` | Chatbot FAQ 4 lapis |
-| `GET/POST /api/tickets`, `GET /api/tickets/:kode` | `api/tickets.ts`, `api/tickets/[id].ts` | Tiket publik |
+| `POST /api/tickets`, `GET /api/tickets/:kode` | `api/tickets.ts`, `api/tickets/[id].ts` | Tiket publik (pelacakan per kode; daftar massal ditutup) |
 | `POST /api/admin/login`, `GET/PATCH /api/admin/tickets` | `api/admin/*.ts` | Login JWT + putusan + WA |
 | `GET /api/tickets/foto` | `api/tickets/foto.ts` | Proksi foto terdekripsi (no-store) |
 | `GET /api/health`, `GET /api/providers` | `api/health.ts`, `api/providers.ts` | Diagnosis + status AI |

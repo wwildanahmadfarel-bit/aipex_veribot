@@ -1206,7 +1206,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     ];
     const seen = new Set<string>();
     for (const log of logs) {
-      const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
+      const note = cleanPublicNote(log?.catatan ?? log?.catatan_petugas);
       // Log rollback adalah audit internal, bukan status final untuk warga.
       if (/^\[ROLLBACK/i.test(note)) continue;
       const status = String(log?.status_baru || "").toUpperCase().trim();
@@ -1226,7 +1226,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     if (finalStatuses.includes(current) && lastStatus !== current) {
       timeline.push({
         status: current,
-        catatan: cleanPublicNote(ticket?.catatan_petugas || ticket?.catatan) || undefined,
+        catatan: cleanPublicNote(ticket?.catatan || ticket?.catatan_petugas) || undefined,
         created_at: String(ticket?.updated_at || ticket?.created_at || ""),
       });
     }
@@ -1352,71 +1352,14 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     }
   });
 
-  // 3. Get All Tickets
+  // 3. Daftar semua tiket DITUTUP untuk publik (paritas api/tickets.ts).
+  // Pelacakan publik hanya per kode: GET /api/tickets/:kode_tiket.
   app.get("/api/tickets", async (_req, res) => {
-    try {
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("tickets")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (!error && data && data.length > 0) {
-          const supabaseMapped = data.map((row: any) => {
-            const rawNik = row.nik || "";
-            const masked = rawNik.length >= 12
-              ? `${rawNik.slice(0, 6)}******${rawNik.slice(-4)}`
-              : (rawNik ? `${rawNik.slice(0, 3)}***${rawNik.slice(-2)}` : "320101******0000");
-
-            return {
-              id: String(row.id || row.kode_tiket),
-              ticket_code: row.kode_tiket,
-              kode_tiket: row.kode_tiket,
-              nik_encrypted: masked,
-              // nik_raw removed for privacy (UU PDP)
-              nama_warga: row.nama || "Warga",
-              nama: row.nama || "Warga",
-              // phone and alamat removed from public list for privacy
-              jenis_dokumen: row.jenis_dokumen || "KTP",
-              // BERHASIL = menunggu verifikasi petugas (lihat catatan di handler :kode_tiket).
-              status_verifikasi: row.status_verifikasi === "BERHASIL" ? "MENUNGGU" : (row.status_verifikasi === "BURAM" ? "REVISI" : (row.status_verifikasi === "PENDING" ? "MENUNGGU" : (row.status_verifikasi || "PENDING"))),
-              skor_ai: row.skor_kejelasan || 90,
-              skor_kejelasan: row.skor_kejelasan || 90,
-              status_ai: row.status_verifikasi === "BERHASIL" || (row.skor_kejelasan >= 70) ? "LULUS" : "GAGAL",
-              catatan_ai: row.catatan || "",
-              catatan: row.catatan || "",
-              created_at: row.created_at ? new Date(row.created_at).toISOString().replace("T", " ").slice(0, 16) : new Date().toISOString().replace("T", " ").slice(0, 16),
-              updated_at: row.created_at ? new Date(row.created_at).toISOString().replace("T", " ").slice(0, 16) : new Date().toISOString().replace("T", " ").slice(0, 16),
-            };
-          });
-
-          return res.json({
-            success: true,
-            data: supabaseMapped,
-            total: supabaseMapped.length,
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("Supabase fetch all tickets warning:", err);
-    }
-
-    // Map in-memory tickets to public format (without nik_raw, phone, alamat)
-    const publicTickets = tickets.map((t: any) => ({
-      ...t,
-      // nik_raw removed for privacy (UU PDP)
-      nik_raw: undefined,
-      phone: undefined,
-      alamat: undefined,
-      // BERHASIL (lolos uji kejelasan) & PENDING sama-sama menunggu petugas.
-      status_verifikasi:
-        t.status_verifikasi === "PENDING" || t.status_verifikasi === "BERHASIL" ? "MENUNGGU" : t.status_verifikasi,
-    }));
-
-    res.json({
-      success: true,
-      data: publicTickets,
-      total: publicTickets.length,
+    return res.status(400).json({
+      success: false,
+      code: "TICKET_CODE_REQUIRED",
+      message:
+        "Daftar tiket publik tidak tersedia. Gunakan GET /api/tickets/:kode_tiket untuk melacak satu tiket.",
     });
   });
 
@@ -1841,7 +1784,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
                   officer_id: officerId,
                   status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
                   status_baru: status,
-                  catatan_petugas: auditNote,
+                  catatan: auditNote,
                 },
               ]);
             } catch (logErr) {
@@ -1913,7 +1856,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
                   status_baru: isValidLogStatus(currentTicket?.status_verifikasi)
                     ? currentTicket.status_verifikasi
                     : "PERLU_PERBAIKAN",
-                  catatan_petugas: `[ROLLBACK WA GAGAL] ${String(waErr?.message || waErr).slice(0, 200)}`,
+                  catatan: `[ROLLBACK WA GAGAL] ${String(waErr?.message || waErr).slice(0, 200)}`,
                 },
               ]);
             } catch {}

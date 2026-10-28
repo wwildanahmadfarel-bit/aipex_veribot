@@ -7,33 +7,24 @@ import {
   memTickets,
   normalizeJenisDokumen,
   normalizeStatusVerifikasi,
-  toPublicTicket,
   type TicketRow,
 } from "./_lib/store.js";
 
-// GET /api/tickets — daftar semua tiket (Supabase utama, memori fallback)
+// GET /api/tickets — DITUTUP untuk publik. Daftar semua tiket pernah
+// mengekspos nama/status seluruh warga. Pelacakan publik hanya per kode
+// melalui GET /api/tickets/:kode_tiket (tanpa identitas petugas).
 // POST /api/tickets — buat tiket (dengan validasi bukti scan)
 export default async function handler(req: any, res: any) {
   if (setCors(req, res)) return;
   const supabase = getSupabase();
 
   if (req.method === "GET") {
-    try {
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("tickets")
-          .select("*")
-          .order("created_at", { ascending: false });
-        if (!error && data && data.length > 0) {
-          return res.json({ success: true, data: data.map(toPublicTicket), total: data.length });
-        }
-      }
-    } catch (err) {
-      console.warn("Supabase fetch all tickets warning:", err);
-    }
-    // Fallback memori juga dimasking (UU PDP) — jangan kembalikan nik_raw/phone/alamat.
-    const memPublic = memTickets.map(toPublicTicket);
-    return res.json({ success: true, data: memPublic, total: memPublic.length });
+    return res.status(400).json({
+      success: false,
+      code: "TICKET_CODE_REQUIRED",
+      message:
+        "Daftar tiket publik tidak tersedia. Gunakan GET /api/tickets/:kode_tiket untuk melacak satu tiket.",
+    });
   }
 
   if (req.method === "POST") {

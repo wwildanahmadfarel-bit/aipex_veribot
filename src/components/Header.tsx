@@ -7,7 +7,6 @@ interface HeaderProps {
   onNavigate: (view: "portal" | "wizard" | "login" | "officer" | "transparansi") => void;
   /** Navigasi terjaga: App menampilkan popup konfirmasi bila sedang mode officer. */
   onRequestNav?: (view: "portal" | "wizard" | "login" | "officer" | "transparansi", targetId?: string, destLabel?: string) => void;
-  pendingCount?: number;
 }
 
 interface NavItem {
@@ -23,7 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "faq", label: "Bantuan & FAQ", targetId: "faqSection" },
 ];
 
-export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onRequestNav, pendingCount = 0 }) => {
+export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onRequestNav }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("beranda");
   const menuRef = useRef<HTMLDivElement>(null);
@@ -266,11 +265,6 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate, onReque
               >
                 <span className="material-symbols-outlined text-[16px] text-[#2563eb]">shield</span>
                 <span>Login Petugas</span>
-                {pendingCount > 0 && (
-                  <span className="w-5 h-5 rounded-full bg-[#2563eb] text-white text-[10px] font-bold flex items-center justify-center ml-1">
-                    {pendingCount}
-                  </span>
-                )}
               </button>
             )}
 

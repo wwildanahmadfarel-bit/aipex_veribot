@@ -148,58 +148,8 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Load initial tickets from backend (jalur publik; /api/admin/* kini wajib Bearer).
-  const fetchTickets = async () => {
-    try {
-      const response = await fetch("/api/tickets");
-      const resJson = await response.json();
-      if (resJson.success && Array.isArray(resJson.data) && resJson.data.length > 0) {
-        const mapped = resJson.data.map((row: any) => {
-          if (row.ticket_code && row.nik_encrypted) return row;
-          const rawNik = row.nik || "";
-          const masked = rawNik.length >= 12
-            ? `${rawNik.slice(0, 6)}******${rawNik.slice(-4)}`
-            : (rawNik ? `${rawNik.slice(0, 3)}***${rawNik.slice(-2)}` : "320101******0000");
-          return {
-            id: String(row.id || row.kode_tiket),
-            ticket_code: row.kode_tiket || `TKT-${String(row.id).slice(0, 6)}`,
-            nik_encrypted: masked,
-            nik_raw: rawNik,
-            nama_warga: row.nama || "Warga",
-            jenis_dokumen: row.jenis_dokumen || "KTP",
-            status_verifikasi:
-              // BERHASIL = menunggu verifikasi petugas (bukan disetujui).
-              row.status_verifikasi === "BERHASIL"
-                ? "MENUNGGU"
-                : row.status_verifikasi === "BURAM" || row.status_verifikasi === "TIDAK_VALID"
-                ? "REVISI"
-                : row.status_verifikasi === "MENUNGGU"
-                  ? "MENUNGGU"
-                  : row.status_verifikasi || "PENDING",
-            skor_ai: row.skor_kejelasan || 88,
-            status_ai:
-              row.status_verifikasi === "BERHASIL" || (row.skor_kejelasan >= 70) ? "LULUS" : "GAGAL",
-            catatan_ai: row.catatan || "",
-            catatan_petugas: row.catatan_petugas || row.catatan || "",
-            created_at: row.created_at
-              ? new Date(row.created_at).toISOString().replace("T", " ").slice(0, 16)
-              : new Date().toISOString().replace("T", " ").slice(0, 16),
-            updated_at: row.created_at
-              ? new Date(row.created_at).toISOString().replace("T", " ").slice(0, 16)
-              : new Date().toISOString().replace("T", " ").slice(0, 16),
-          };
-        });
-        setTickets(mapped);
-        return;
-      }
-    } catch (err) {
-      console.warn("Could not fetch tickets from /api/tickets:", err);
-    }
-  };
-
-  useEffect(() => {
-    fetchTickets();
-  }, []);
+  // Daftar tiket publik tidak lagi dimuat: GET /api/tickets kini menolak
+  // permintaan tanpa kode (privasi UU PDP). Pelacakan memakai /api/tickets/:kode.
 
   // Open Wizard for a specific service. Selalu mulai sesi baru: buang hasil
   // pra-pemeriksaan lama agar tidak ter-prefill tanpa sadar. (Jalur dari kartu
@@ -266,11 +216,6 @@ export default function App() {
     setTicketHistory(rememberTicket(newTicket));
   };
 
-  // Sinkron dengan AdminDashboard: semua yang butuh verifikasi petugas.
-  const pendingCount = tickets.filter((t) =>
-    ["PENDING", "MENUNGGU", "BERHASIL", "BURAM", "REVISI", "PERLU_PERBAIKAN"].includes(String(t.status_verifikasi || "").toUpperCase())
-  ).length;
-
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col justify-between text-[#0F172A] antialiased selection:bg-blue-600 selection:text-white">
       {/* Official Header */}
@@ -282,7 +227,6 @@ export default function App() {
         onRequestNav={(view, targetId, destLabel) => {
           requestNavigate(view, targetId, destLabel);
         }}
-        pendingCount={pendingCount}
       />
 
       {/* Main Container */}

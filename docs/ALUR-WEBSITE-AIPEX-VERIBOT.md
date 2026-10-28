@@ -18,7 +18,7 @@ Prinsip utama:
 State `currentView`: `portal | wizard | login | officer`.
 
 ```text
-Header (portal/wizard/login/officer, badge pendingCount, menu Login Petugas)
+Header (portal/wizard/login/officer, menu Login Petugas)
   -> portal (default): PortalHome
   -> wizard: InteractiveWizard (4 langkah)
   -> login (modal): OfficerLoginModal -> sukses -> officer
@@ -198,7 +198,7 @@ pertanyaan katalog, guardrail kata utuh, dan klarifikasi pertanyaan multi-topik.
 | `GET /api/health` | `api/health.ts` | Status + compliance UU PDP |
 | `GET /api/providers` | `api/providers.ts` | Daftar AI provider tanpa bocor key |
 | `POST /api/ocr`, `POST /api/scan-document` | `api/ocr.ts`, `api/scan-document.ts` → `_lib/ocr-handler.ts` | OCR Vision + buat tiket otomatis jika valid |
-| `GET /api/tickets`, `POST /api/tickets` | `api/tickets.ts` | List + buat tiket wizard (dengan bukti scan) |
+| `POST /api/tickets` | `api/tickets.ts` | Buat tiket wizard (dengan bukti scan). `GET /api/tickets` tanpa kode ditolak `400 TICKET_CODE_REQUIRED` |
 | `GET /api/tickets/:kode` | `api/tickets/[id].ts` | Lacak 1 tiket + `riwayat[]` publik (tanpa identitas petugas) |
 | `POST /api/chat-faq` | `api/chat-faq.ts` | Chatbot FAQ |
 | `POST /api/admin/login`, `GET/PATCH /api/admin/tickets` | `api/admin/*`, `api/officer/*` | Auth petugas + kelola tiket |

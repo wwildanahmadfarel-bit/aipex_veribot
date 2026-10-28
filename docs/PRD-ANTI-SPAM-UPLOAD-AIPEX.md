@@ -14,7 +14,7 @@ Temuan dari audit kode (`api/_lib/ocr-handler.ts`, `api/_lib/http.ts`, `server.t
 2. Tidak ada rate-limit, captcha, throttling IP, maupun kuota harian. CORS `Access-Control-Allow-Origin: *`.
 3. Validasi tipe/ukuran file hanya di frontend (`accept="image/*"`, cek 10 MB). Mudah di-bypass via `curl` dengan body `imageBase64` JSON.
 4. `tickets[]` in-memory tidak persisten di Vercel Serverless, sehingga proteksi berbasis memori tidak akan jalan antar-invokasi.
-5. Endpoint lain yang juga memakan token: `POST /api/chat-faq` (Gemini chat). Endpoint murah: `GET /api/tickets`, `GET /api/tickets/:kode`, `POST /api/tickets`, `PATCH /api/admin/tickets`.
+5. Endpoint lain yang juga memakan token: `POST /api/chat-faq` (Gemini chat). Endpoint murah: `GET /api/tickets/:kode`, `POST /api/tickets`, `PATCH /api/admin/tickets` (wajib Bearer).
 
 Dampak: spammer/bot dapat melakukan loop upload ribuan kali, menghabiskan token Gemini/Nara Route, menaikkan tagihan, dan membuat layanan lambat/down untuk warga asli.
 

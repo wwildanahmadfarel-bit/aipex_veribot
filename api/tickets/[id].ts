@@ -29,7 +29,7 @@ function buildPublicTimeline(ticket: any, logs: any[] = []): PublicTimelineItem[
   const seen = new Set<string>();
 
   for (const log of logs) {
-    const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
+    const note = cleanPublicNote(log?.catatan ?? log?.catatan_petugas);
     // Log rollback adalah audit internal, bukan status final untuk warga.
     if (/^\[ROLLBACK/i.test(note)) continue;
     const status = String(log?.status_baru || "").toUpperCase().trim();
@@ -51,7 +51,7 @@ function buildPublicTimeline(ticket: any, logs: any[] = []): PublicTimelineItem[
   if (finalStatuses.includes(current) && lastStatus !== current) {
     timeline.push({
       status: current,
-      catatan: cleanPublicNote(ticket?.catatan_petugas || ticket?.catatan) || undefined,
+      catatan: cleanPublicNote(ticket?.catatan || ticket?.catatan_petugas) || undefined,
       created_at: String(ticket?.updated_at || ticket?.created_at || ""),
     });
   }

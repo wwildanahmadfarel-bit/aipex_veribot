@@ -138,7 +138,7 @@ export default async function handler(req: any, res: any) {
                   officer_id: officerId,
                   status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
                   status_baru: status,
-                  catatan_petugas: auditNote,
+                  catatan: auditNote,
                 },
               ]);
             } catch {}
@@ -189,12 +189,12 @@ export default async function handler(req: any, res: any) {
                   ticket_id: updatedTicket?.id,
                   officer_id: officerId,
                   // status_baru wajib lolos CHECK: pakai status pulihan yang valid,
-                  // alasan rollback dicatat di catatan_petugas.
+                  // alasan rollback dicatat di kolom catatan (skema aktual).
                   status_sebelumnya: isValidLogStatus(status) ? status : "DITOLAK",
                   status_baru: isValidLogStatus(currentTicket?.status_verifikasi)
                     ? currentTicket.status_verifikasi
                     : "PERLU_PERBAIKAN",
-                  catatan_petugas: `[ROLLBACK WA GAGAL] ${reason}`,
+                  catatan: `[ROLLBACK WA GAGAL] ${reason}`,
                 },
               ]);
             } catch {}
