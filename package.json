@@ -13,6 +13,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:auth": "tsx scripts/test-officer-auth.ts",
+    "test:faq": "tsx scripts/test-faq.ts",
     "officer:create": "tsx scripts/create-officer.ts"
   },
   "dependencies": {

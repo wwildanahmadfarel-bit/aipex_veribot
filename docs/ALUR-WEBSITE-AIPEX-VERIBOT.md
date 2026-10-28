@@ -168,14 +168,26 @@ petugas dan tidak bisa dipakai untuk login.
 
 Lokasi: `FloatingVeriBot.tsx` (bubble 1:1 pojok kanan bawah) → `POST /api/chat-faq {message}`.
 
+Sumber konten: `src/data/faqData.ts` — satu katalog 25 intent dipakai bersama oleh
+accordion FAQ portal (6 item), chip chatbot (8 item), dan resolver offline. Matcher
+`src/lib/faqMatch.ts` mencocokkan kata/frasa utuh (bukan substring), memberi bonus
+untuk pertanyaan katalog yang persis, dan meminta klarifikasi bila beberapa intent
+sama kuat. Dengan begitu chip/FAQ portal selalu dijawab knowledge base tanpa AI.
+
 Urutan backend (`api/chat-faq.ts`, `server.ts`):
 
-1. Coba Nara Route chat jika dikonfigurasi.
-2. Coba Gemini `gemini-3.6-flash` → fallback `gemini-2.5-flash`.
-3. Fallback offline `getOfflineFaqAnswer` (jam loket, syarat KTP hilang/rusak/baru, KIA, KK, akta, RT/RW Perpres 96/2018, PDP, alamat/kontak).
-4. Emergency fallback statis jika semua error (tetap `success:true` agar chat tidak mati).
+1. Knowledge base offline `getOfflineFaqAnswer` — intent dikenal dijawab instan.
+2. Cache Redis 24 jam untuk pertanyaan yang pernah dijawab AI.
+3. Gemini `gemini-3.8-flash` → `gemini-3.7-flash` → `gemini-3.5-flash` → `gemini-3.5-flash-lite` (timeout per model 8 dtk, anggaran total 15 dtk).
+4. Nara Route / Bynara jika dikonfigurasi (timeout 12 dtk).
+5. Fallback statis `FAQ_FALLBACK_REPLY` jika semua jalur gagal (tetap `success:true` agar chat tidak mati).
 
-Quick chips: Jam Loket, Syarat KTP Hilang, Fast-Track, link Testimoni Google Form.
+Quick chips (8): Jam Loket, KTP Hilang, KK Baru, KIA, Akta Lahir, Pindah, Biaya,
+Tiket QR, ditambah link Testimoni Google Form. Chip mengirim pertanyaan lengkap dari
+katalog sehingga cocok dengan bonus exact-question pada matcher.
+
+Regresi: `npm run test:faq` menguji 25 intent, 6 FAQ portal, 8 chip, parafrase,
+pertanyaan katalog, guardrail kata utuh, dan klarifikasi pertanyaan multi-topik.
 
 ## 10. Arsitektur API & Data (Vercel)
 

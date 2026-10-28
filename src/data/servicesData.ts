@@ -21,8 +21,8 @@ export const catalogServices: ServiceCatalogItem[] = [
         mandatory: true,
       },
       {
-        title: "Kutipan Akta Kelahiran",
-        description: "Wajib untuk penerbitan baru; untuk penggantian dilampirkan bila ada.",
+        title: "Kutipan Akta Kelahiran / Ijazah",
+        description: "Salah satu dokumen untuk penerbitan baru; untuk penggantian dilampirkan bila ada.",
         mandatory: true,
       },
       {

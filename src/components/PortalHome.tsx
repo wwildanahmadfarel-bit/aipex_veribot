@@ -1,8 +1,13 @@
 import React, { useCallback, useState } from "react";
 import { ServiceCatalogItem, PreScreenInitialData } from "../types";
 import { catalogServices } from "../data/servicesData";
+import { FAQ_PORTAL_IDS, FAQ_SOURCE_NOTE, getFaqEntries } from "../data/faqData";
+import { renderChatReply } from "../lib/chatFormat";
 import { OcrPreScreenCard } from "./OcrPreScreenCard";
 import type { TicketHistoryItem } from "../lib/ticketHistory";
+
+// FAQ portal memakai katalog yang sama dengan chatbot agar copy tidak drift.
+const portalFaqs = getFaqEntries(FAQ_PORTAL_IDS);
 
 // Kamera QR dimuat malas: library html5-qrcode (~350KB) tidak ikut bundle awal.
 const QrScanModal = React.lazy(() =>
@@ -123,7 +128,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
       {/* SEARCH & TRACKING BAR */}
       <section
         id="lacakSection"
-        className="bg-white p-4 lg:p-6 rounded-2xl shadow-sm border border-slate-200/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+        className="scroll-mt-28 bg-white p-4 lg:p-6 rounded-2xl shadow-sm border border-slate-200/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
       >
         <div className="flex items-start gap-3 max-w-md">
           <span className="material-symbols-outlined text-[#2563eb] text-[26px] mt-0.5 shrink-0">
@@ -258,7 +263,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
 
 
       {/* 4 LANGKAH MUDAH PRE-SCREENING */}
-      <section className="flex flex-col gap-3" id="alurLayanan">
+      <section className="scroll-mt-28 flex flex-col gap-3" id="alurLayanan">
         <div className="flex flex-wrap items-center justify-between gap-1.5 px-0.5">
           <div className="flex items-center gap-2">
             <span className="text-[10px] uppercase font-bold text-[#2563eb] bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-full">
@@ -531,7 +536,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
       </section>
 
       {/* FAQ ACCORDION & JAM PELAYANAN */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-4" id="faqSection">
+      <section className="scroll-mt-28 grid grid-cols-1 lg:grid-cols-12 gap-6 pt-4" id="faqSection">
         <div className="lg:col-span-5 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between gap-4">
           <div className="flex flex-col gap-3">
             <span className="px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-[#2563eb] font-bold text-[10px] uppercase self-start">
@@ -566,49 +571,25 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
         </div>
 
         <div className="lg:col-span-7 flex flex-col gap-3">
-          <details className="group bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200" open>
-            <summary className="flex items-center justify-between cursor-pointer text-xs sm:text-sm font-bold text-slate-900 list-none">
-              <span>Mengapa foto KTP sering ditolak saat pengajuan di loket kelurahan?</span>
-              <span className="material-symbols-outlined transition-transform group-open:rotate-180 text-[#2563eb]">
-                expand_more
-              </span>
-            </summary>
-            <p className="text-xs text-slate-600 mt-3 leading-relaxed border-t border-slate-100 pt-3">
-              Sebagian besar penolakan disebabkan oleh pantulan lampu (silau) yang menutupi 16 digit NIK,
-              sudut pengambilan terlalu miring, atau resolusi kamera yang buram. VeriBot AI secara otomatis
-              mendeteksi masalah ini dan meminta warga mengambil ulang foto yang presisi sebelum ke loket.
-            </p>
-          </details>
+          {portalFaqs.map((faq, index) => (
+            <details
+              key={faq.id}
+              className="group bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200"
+              open={index === 0}
+            >
+              <summary className="flex items-center justify-between cursor-pointer text-xs sm:text-sm font-bold text-slate-900 list-none">
+                <span>{faq.question}</span>
+                <span className="material-symbols-outlined transition-transform group-open:rotate-180 text-[#2563eb]">
+                  expand_more
+                </span>
+              </summary>
+              <div className="text-xs text-slate-600 mt-3 leading-relaxed border-t border-slate-100 pt-3">
+                {renderChatReply(faq.answer)}
+              </div>
+            </details>
+          ))}
 
-          <details className="group bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
-            <summary className="flex items-center justify-between cursor-pointer text-xs sm:text-sm font-bold text-slate-900 list-none">
-              <span>Apakah surat pengantar dari RT/RW masih diwajibkan?</span>
-              <span className="material-symbols-outlined transition-transform group-open:rotate-180 text-[#2563eb]">
-                expand_more
-              </span>
-            </summary>
-            <p className="text-xs text-slate-600 mt-3 leading-relaxed border-t border-slate-100 pt-3">
-              Berdasarkan Perpres No. 96 Tahun 2018, pengurusan KTP-EL baru atau penggantian rusak/hilang
-              tidak lagi memerlukan pengantar RT/RW asalkan data NIK sudah sinkron. Namun untuk perpindahan
-              alamat domisili baru, verifikasi lingkungan RT/RW tetap dianjurkan.
-            </p>
-          </details>
-
-          <details className="group bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
-            <summary className="flex items-center justify-between cursor-pointer text-xs sm:text-sm font-bold text-slate-900 list-none">
-              <span>Bagaimana cara kerja Tiket QR Antrean VeriBot?</span>
-              <span className="material-symbols-outlined transition-transform group-open:rotate-180 text-[#2563eb]">
-                expand_more
-              </span>
-            </summary>
-            <p className="text-xs text-slate-600 mt-3 leading-relaxed border-t border-slate-100 pt-3">
-              Semua dokumen kependudukan yang valid memperoleh tiket QR antrean. Skor validasi AI minimal
-              70% berlabel <b>Diterima — Lolos Pra-Pemeriksaan</b>; skor di bawah 70% atau foto buram
-              tetap terbit dengan label <b>Diterima — Verifikasi Loket</b>. Di loket, pemegang tiket
-              dipanggil ke meja verifikator tanpa mengisi formulir kertas tambahan. QR ini tiket antrean,
-              bukan bukti dokumen sah.
-            </p>
-          </details>
+          <p className="text-[10px] text-slate-400 leading-relaxed px-1">{FAQ_SOURCE_NOTE}</p>
         </div>
       </section>
 

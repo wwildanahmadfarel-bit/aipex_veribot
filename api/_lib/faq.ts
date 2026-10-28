@@ -12,6 +12,7 @@ import { sha256Hex } from "./file-guard.js";
 import { redisGet, redisSet } from "./rate-limit.js";
 import { getGeminiClient, isNaraConfigured } from "./store.js";
 import { chatCompletionViaNaraRoute } from "../../services/ai_providers.js";
+import { matchFaqEntry } from "../../src/lib/faqMatch.js";
 
 export const FAQ_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const FAQ_GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"];
@@ -22,51 +23,28 @@ const NARA_TIMEOUT_MS = 12_000;
 /**
  * Resolver knowledge base offline. Mengembalikan null bila pertanyaan tidak
  * dikenal — pemanggil boleh lanjut ke AI, bukan menjawab generik.
- * Ambang skor seragam 70 (lihat composeAlasan & kartu rekomendasi klien).
+ * Bila beberapa intent sama kuat, minta klarifikasi agar tidak salah jawab.
  */
 export function getOfflineFaqAnswer(text: string): string | null {
-  const lower = text.toLowerCase();
-  if (lower.includes("pdp") || lower.includes("privasi") || lower.includes("aman") || lower.includes("ram") || lower.includes("keamanan") || lower.includes("hapus") || lower.includes("purge")) {
-    return "🛡️ **Kepatuhan Privasi UU PDP (UU No. 27 Tahun 2022):**\nFoto e-KTP/KK warga disimpan SEMENTARA terenkripsi di penyimpanan privat — hanya terlihat petugas dan pemilik tiket — lalu dihapus otomatis (purge) seketika tiket disetujui/ditolak. Foto tiket terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen kependudukan untuk rekap.";
+  const match = matchFaqEntry(text);
+  if (!match) return null;
+
+  if (match.tied.length > 1) {
+    const options = match.tied
+      .slice(0, 4)
+      .map((entry) => `• ${entry.question}`)
+      .join("\n");
+    return `Saya menemukan beberapa topik yang cocok. Mohon pilih salah satu agar jawabannya tepat:\n${options}`;
   }
-  if (lower.includes("jam") || lower.includes("buka") || lower.includes("operasional") || lower.includes("tutup") || lower.includes("jadwal")) {
-    return "🕒 **Jam Operasional Loket Kelurahan Sukamaju:**\n• **Senin - Kamis:** 08.00 - 15.30 WIB\n• **Jumat:** 08.00 - 14.30 WIB\n• **Sabtu, Minggu & Libur Nasional:** Loket fisik tutup.\n\nLayanan online mandiri **AIPEX VeriBot** tetap aktif 24 jam nonstop untuk pra-pemeriksaan berkas dan Tiket QR Antrean!";
-  }
-  if (lower.includes("ktp") || lower.includes("e-ktp")) {
-    if (lower.includes("hilang")) {
-      return "🪪 **Syarat Pengurusan KTP Hilang:**\n1. Surat Keterangan Kehilangan dari Polsek setempat.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak perlu surat pengantar RT/RW (Perpres No. 96/2018).\n\n💡 *Tips:* Unggah foto berkas KK Anda di menu pra-pemeriksaan untuk mendapatkan Tiket QR Antrean tanpa antre lama di loket!";
-    }
-    if (lower.includes("rusak")) {
-      return "🪪 **Syarat Penggantian KTP Rusak:**\n1. Membawa fisik e-KTP lama yang rusak.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak dipungut biaya (Gratis 100%).\n\nSilakan gunakan fitur OCR VeriBot untuk memverifikasi kejelasan dokumen sebelum ke kantor kelurahan.";
-    }
-    return "🪪 **Syarat Pembuatan KTP-EL Baru (Pemula Usia 17 Tahun):**\n1. Cukup bawa Fotokopi Kartu Keluarga (KK).\n2. Tidak memerlukan surat pengantar RT/RW sesuai Perpres No. 96 Tahun 2018.\n3. Perekaman foto & sidik jari dilakukan langsung di loket kelurahan.\n\nUnggah foto KK Anda sekarang untuk reservasi Tiket QR Antrean!";
-  }
-  if (lower.includes("fast-track") || lower.includes("tiket") || lower.includes("antre") || lower.includes("prioritas") || lower.includes("qr")) {
-    return "⚡ **Tiket QR Antrean VeriBot:**\nSemua dokumen kependudukan yang valid (KTP, KK, KIA, akta, surat pindah) dapat memperoleh **Tiket QR Antrean**.\n\n• Skor kejelasan ≥70%: label **Diterima — Lolos Pra-Pemeriksaan**.\n• Skor <70% atau foto buram: label **Diterima — Verifikasi Loket** — QR tetap terbit, tetapi dokumen asli tetap diperiksa petugas.\n• Bukan dokumen kependudukan: QR tidak diterbitkan.\n\nQR ini tiket antrean, bukan bukti dokumen sah.";
-  }
-  if (lower.includes("kia") || lower.includes("anak")) {
-    return "👶 **Syarat Kartu Identitas Anak (KIA):**\n1. Fotokopi Akta Kelahiran anak.\n2. Fotokopi Kartu Keluarga (KK) orang tua.\n3. Fotokopi KTP-EL kedua orang tua.\n4. Pasfoto berwarna ukuran 3x4 sebanyak 2 lembar (khusus anak usia di atas 5 tahun). Untuk usia 0-5 tahun tidak memerlukan foto.";
-  }
-  if (lower.includes("kk") || lower.includes("kartu keluarga")) {
-    return "👨‍👩‍👧‍👦 **Layanan Kartu Keluarga (KK):**\n• **Penambahan Anggota (Kelahiran):** KK lama, Surat Keterangan Lahir / Akta Lahir, KTP orang tua.\n• **Perubahan Data:** KK lama & dokumen pendukung (ijazah, akta nikah, surat pindah).\n• **Penerbitan Baru:** Buku Nikah/Akta Perkawinan, KK asal masing-masing suami & istri.";
-  }
-  if (lower.includes("akta") || lower.includes("lahir") || lower.includes("mati") || lower.includes("kematian") || lower.includes("nikah")) {
-    return "📜 **Layanan Akta Pencatatan Sipil:**\n• **Akta Kelahiran:** Surat Keterangan Lahir dari Bidan/RS, Buku Nikah/Akta Perkawinan, KK, dan KTP orang tua.\n• **Akta Kematian:** Surat Kematian dari RS/Dokter/Kelurahan, KTP almarhum, KK, KTP pelapor & 2 saksi.\n• **Akta Perkawinan Non-Muslim:** Surat Pemberkatan dari Pemuka Agama, KTP suami istri, KK, pasfoto berdampingan.";
-  }
-  if (lower.includes("rt") || lower.includes("rw") || lower.includes("pengantar")) {
-    return "📜 Sesuai amanat **Perpres No. 96 Tahun 2018**, pengurusan dokumen kependudukan dasar (seperti KTP-EL baru/rusak/hilang, Akta Kelahiran, dan pembaruan KK) **tidak lagi memerlukan surat pengantar RT/RW** sepanjang NIK sudah terdaftar aktif di Ditjen Dukcapil.";
-  }
-  if (lower.includes("lokasi") || lower.includes("alamat") || lower.includes("kantor") || lower.includes("kontak") || lower.includes("telepon") || lower.includes("whatsapp") || lower.includes("wa")) {
-    return "📍 **Kantor Kelurahan Sukamaju:**\n• **Alamat:** Jl. Praja Abdi No. 45, Kecamatan Maju Sejahtera\n• **WhatsApp / Call Center:** +62 811-2345-6789\n• **Email Resmi:** layanan@sukamaju.desa.id\n• **Website / VeriBot:** 24 Jam Mandiri Online";
-  }
-  return null;
+
+  return match.entry.answer;
 }
 
 export const FAQ_FALLBACK_REPLY =
-  "Halo Warga Sukamaju! Saya **VeriBot AI**, asisten cerdas pelayanan kependudukan Kelurahan Sukamaju.\n\nSilakan tanyakan seputar:\n• Syarat KTP-EL Baru / Hilang / Rusak\n• Prosedur Tiket QR Antrean\n• Pembuatan KIA, KK, dan Akta Pencatatan Sipil\n• Jadwal loket & standar pelayanan tanpa surat pengantar RT/RW.";
+  "Halo Warga Sukamaju! Saya **VeriBot AI**, asisten cerdas pelayanan kependudukan Kelurahan Sukamaju.\n\nSilakan tanyakan seputar:\n• Syarat KTP-el, KK, KIA, akta, dan surat pindah\n• Biaya dan lama proses layanan\n• Tiket QR, cek status, dan riwayat tiket\n• IKD, SKU, sinkronisasi NIK, serta privasi data\n\nKetik pertanyaan atau pilih chip di bawah.";
 
 export const FAQ_EMERGENCY_REPLY =
-  "Halo Warga Sukamaju! Saya VeriBot siap membantu Anda. Untuk pengurusan dokumen kependudukan (KTP, KK, KIA), loket buka Senin-Kamis 08.00-15.30 WIB dan Jumat 08.00-14.30 WIB. Anda dapat langsung mengunggah foto berkas di formulir mandiri untuk mendapatkan Tiket QR Antrean!";
+  "Halo Warga Sukamaju! Saya VeriBot siap membantu Anda. Untuk pengurusan dokumen kependudukan (KTP, KK, KIA), loket buka Senin-Kamis 08.00-15.30 WIB dan Jumat 08.00-14.30 WIB. Semua layanan dasar tidak dipungut biaya. Anda dapat langsung mengunggah foto berkas di formulir mandiri untuk mendapatkan Tiket QR Antrean!";
 
 export const FAQ_SYSTEM_PROMPT = `Anda adalah "Asisten Pintar VeriBot", petugas customer service AI resmi Kelurahan Sukamaju (Kecamatan Maju Sejahtera) dalam sistem AIPEX VeriBot (DIGIForward 2026).
 Tugas Anda adalah melayani warga kelurahan secara ramah, sopan, ringkas, dan jelas dalam bahasa Indonesia.
@@ -78,18 +56,28 @@ Informasi Resmi Kelurahan Sukamaju:
   * Sabtu, Minggu, & Libur Nasional: Tutup (Layanan Mandiri Online VeriBot 24 Jam Non-Stop)
 - Alamat: Jl. Praja Abdi No. 45, Kecamatan Maju Sejahtera
 - Call Center / WhatsApp: +62 811-2345-6789 | Email: layanan@sukamaju.desa.id
-- Syarat KTP-EL:
-  * Baru: Usia 17 tahun, Fotokopi Kartu Keluarga (KK). Tanpa surat pengantar RT/RW (Perpres No. 96 Tahun 2018).
-  * Rusak: Fisik KTP lama, Fotokopi KK.
-  * Hilang: Surat Keterangan Kehilangan dari Polsek setempat + Fotokopi KK.
-- Syarat Kartu Identitas Anak (KIA): Fotokopi Akta Lahir, KK orang tua, KTP orang tua, pasfoto 3x4 (untuk anak usia di atas 5 tahun).
-- Akta Kematian: Surat Kematian dari RS/Dokter/Kelurahan, KTP almarhum, KK, KTP 2 saksi.
-- Akta Perkawinan: Surat nikah keagamaan, KTP suami istri, KK, pasfoto berdampingan.
-- Surat Pindah (SKPWNI): KK asli, KTP pemohon, form permohonan pindah.
-- Tiket QR Antrean: Dokumen kependudukan valid selalu memperoleh tiket QR. Skor kejelasan minimal 70% berlabel "Diterima — Lolos Pra-Pemeriksaan"; skor di bawah 70% atau foto buram tetap terbit dengan label "Diterima — Verifikasi Loket". Bukan dokumen kependudukan tidak diterbitkan QR. QR ini tiket antrean, bukan bukti dokumen sah.
-- UU PDP Compliance: Foto dokumen disimpan sementara terenkripsi di penyimpanan privat (terlihat petugas + pemilik tiket), dihapus otomatis (purge) seketika tiket disetujui/ditolak; foto terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen kependudukan untuk rekap.
+- Biaya: layanan dasar (KTP-el, KK, KIA, akta, surat pindah, legalisasi) TIDAK dipungut biaya.
+- Waktu proses: KK/akta/surat pindah umumnya 1 hari kerja bila berkas lengkap; KTP-el 1-14 hari kerja tergantung konsolidasi data dan blanko; sinkronisasi NIK sekitar 1x24 jam.
+- KTP-el baru: fotokopi KK, fotokopi akta kelahiran/ijazah, formulir F1.02, perekaman di loket. Tanpa surat pengantar RT/RW (Perpres No. 96 Tahun 2018).
+- KTP-el hilang: surat keterangan kehilangan dari Polsek, fotokopi KK, F1.02. KTP-el rusak: fisik KTP lama, fotokopi KK, F1.02.
+- KK: baru (buku nikah/akta perkawinan, KK asal, KTP-el pasangan); penambahan anggota (KK lama, akta/surat lahir, KTP orang tua); perubahan data (KK lama + dokumen pendukung); hilang (surat kehilangan Polsek); rusak (KK lama).
+- KIA: fotokopi akta kelahiran, KK orang tua, KTP-el orang tua, pasfoto 3x4 2 lembar untuk anak di atas 5 tahun.
+- Akta kelahiran: surat keterangan lahir, fotokopi buku nikah/akta perkawinan, KK dan KTP orang tua, KTP 2 saksi, F2.01. Bisa dilengkapi SPTJM Kelahiran bila surat lahir tidak ada.
+- Akta kematian: surat keterangan kematian, KTP-el dan KK almarhum, KTP pelapor, KTP 2 saksi, F2.01. Bisa dilengkapi SPTJM Kematian bila surat kematian tidak ada.
+- Akta perkawinan non-Muslim: surat pemberkatan, KTP-el dan KK mempelai, KTP orang tua, pasfoto 4x6 4 lembar.
+- Surat pindah (SKPWNI): KK asli, KTP-el anggota yang pindah, formulir F1.08, alamat tujuan lengkap.
+- IKD: sudah perekaman KTP-el, smartphone Android/iOS, email aktif, verifikasi wajah/QR di loket.
+- SKU: KTP-el dan KK, surat pengantar RT/RW, foto lokasi usaha, formulir.
+- Sinkronisasi NIK: KTP-el dan KK, tangkapan layar kendala, nomor WhatsApp aktif.
+- Legalisasi: fotokopi KTP-el dan KK, produk layanan asli, maksimal 10 lembar, sekitar 2 jam.
+- Foto dokumen: JPG/PNG/WEBP/PDF maksimal 4 MB, tidak silau/terpotong, NIK dan barcode terbaca.
+- Tiket QR Antrean: dokumen kependudukan valid selalu memperoleh tiket QR. Skor kejelasan minimal 70 berlabel "Diterima - Lolos Pra-Pemeriksaan"; skor di bawah 70 atau foto buram tetap terbit dengan label "Diterima - Verifikasi Loket". Bukan dokumen kependudukan tidak diterbitkan QR. QR ini tiket antrean, bukan bukti dokumen sah.
+- Cek tiket: masukkan kode tiket di kolom Lacak Tiket atau pindai QR; riwayat lokal maksimal 5 tiket dan tersimpan 30 hari.
+- UU PDP: foto dokumen disimpan sementara terenkripsi di penyimpanan privat (terlihat petugas + pemilik tiket), dihapus otomatis (purge) seketika tiket disetujui/ditolak; foto terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen kependudukan untuk rekap.
 
-Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf). Pisahkan tiap paragraf dengan satu baris kosong. Pakai **tebal** untuk istilah penting dan daftar "•" untuk rincian (maksimal 5 butir).`;
+Aturan menjawab:
+- Jawab HANYA berdasarkan informasi resmi di atas. Jika informasi tidak ada, katakan belum ada informasi pasti dan arahkan ke loket/WhatsApp resmi. Jangan mengarang persyaratan, biaya, atau waktu layanan.
+- Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf). Pisahkan tiap paragraf dengan satu baris kosong. Pakai **tebal** untuk istilah penting dan daftar "•" untuk rincian (maksimal 5 butir).`;
 
 function normalizeQuestion(text: string): string {
   return String(text || "")

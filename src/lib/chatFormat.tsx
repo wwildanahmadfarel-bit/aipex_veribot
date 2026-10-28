@@ -2,6 +2,7 @@ import React from "react";
 
 // Renderer jawaban bot VeriBot — paragraf rapi gaya EYD + Poppins.
 // - Paragraf (\n\n): rata kanan-kiri (justify) + alinea (indent baris pertama).
+// - Opsi align "left" untuk bubble chat sempit agar spasi tidak melebar.
 // - Inline: **tebal**, *miring*, `kode`.
 // - Daftar "• / -" -> <ul>, "1." -> <ol> (tanpa indent alinea).
 // - URL otomatis jadi link _blank.
@@ -72,8 +73,18 @@ function orderedText(line: string): string {
   return line.trim().replace(/^\d+[.)]\s+/, "");
 }
 
+export interface ChatFormatOptions {
+  /**
+   * "justify" (default) untuk panel lebar seperti FAQ portal.
+   * "left" untuk bubble chat sempit supaya spasi antar kata tidak melebar.
+   */
+  align?: "justify" | "left";
+}
+
 /** Render teks jawaban bot menjadi blok paragraf/daftar yang rapi. */
-export function renderChatReply(text: string): React.ReactNode {
+export function renderChatReply(text: string, options: ChatFormatOptions = {}): React.ReactNode {
+  const align = options.align ?? "justify";
+  const listAlign = align === "left" ? "text-left" : "text-justify";
   const normalized = String(text || "").replace(/\r\n/g, "\n").trim();
   if (!normalized) return null;
   const blocks = normalized.split(/\n{2,}/);
@@ -89,7 +100,7 @@ export function renderChatReply(text: string): React.ReactNode {
     const idx = nodes.length;
     if (ordered) {
       nodes.push(
-        <ol key={`ol${idx}`} className="list-decimal ml-5 space-y-1 text-justify">
+        <ol key={`ol${idx}`} className={`list-decimal ml-5 space-y-1 ${listAlign}`}>
           {items.map((it, j) => (
             <li key={j}>{renderInline(it, `ol${idx}-${j}`)}</li>
           ))}
@@ -97,7 +108,7 @@ export function renderChatReply(text: string): React.ReactNode {
       );
     } else {
       nodes.push(
-        <ul key={`ul${idx}`} className="list-disc ml-5 space-y-1 text-justify">
+        <ul key={`ul${idx}`} className={`list-disc ml-5 space-y-1 ${listAlign}`}>
           {items.map((it, j) => (
             <li key={j}>{renderInline(it, `ul${idx}-${j}`)}</li>
           ))}
@@ -120,8 +131,8 @@ export function renderChatReply(text: string): React.ReactNode {
       nodes.push(
         <p
           key={`p${bi}-${idx}`}
-          style={{ textAlign: "justify", textIndent: "1.5em" }}
-          className="leading-relaxed"
+          style={align === "justify" ? { textAlign: "justify", textIndent: "1.5em" } : undefined}
+          className={`leading-relaxed ${align === "left" ? "text-left" : ""}`}
         >
           {renderInline(joined, `p${bi}-${idx}`)}
         </p>
