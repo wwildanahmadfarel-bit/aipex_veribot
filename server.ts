@@ -1187,6 +1187,52 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
   });
 
   // 2. Track/Get specific ticket by ticket code
+
+  // Timeline publik: hanya status, waktu, dan catatan; tanpa officer_id.
+  // Mirror api/tickets/[id].ts agar perilaku dev = produksi.
+  const cleanPublicNote = (raw: unknown): string =>
+    String(raw ?? "")
+      .split(PHOTO_PURGE_AUDIT_NOTE)
+      .join("")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const buildPublicTimeline = (ticket: any, logs: any[] = []) => {
+    const timeline: Array<{ status: string; catatan?: string; created_at: string }> = [
+      {
+        status: "DITERIMA",
+        created_at: String(ticket?.created_at || ""),
+      },
+    ];
+    const seen = new Set<string>();
+    for (const log of logs) {
+      const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
+      // Log rollback adalah audit internal, bukan status final untuk warga.
+      if (/^\[ROLLBACK/i.test(note)) continue;
+      const status = String(log?.status_baru || "").toUpperCase().trim();
+      if (!status) continue;
+      const key = `${status}|${String(log?.created_at || "")}|${note}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      timeline.push({
+        status,
+        catatan: note || undefined,
+        created_at: String(log?.created_at || ""),
+      });
+    }
+    const current = String(ticket?.status_verifikasi || "").toUpperCase().trim();
+    const finalStatuses = ["DISETUJUI", "APPROVED", "DITOLAK", "REJECTED", "PERLU_PERBAIKAN"];
+    const lastStatus = timeline[timeline.length - 1]?.status;
+    if (finalStatuses.includes(current) && lastStatus !== current) {
+      timeline.push({
+        status: current,
+        catatan: cleanPublicNote(ticket?.catatan_petugas || ticket?.catatan) || undefined,
+        created_at: String(ticket?.updated_at || ticket?.created_at || ""),
+      });
+    }
+    return timeline;
+  };
+
   app.get("/api/tickets/:kode_tiket", async (req, res) => {
     try {
       const kodeTiket = req.params.kode_tiket.trim().toUpperCase();
@@ -1228,6 +1274,18 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
               created_at: data.created_at ? new Date(data.created_at).toISOString().replace("T", " ").slice(0, 16) : new Date().toISOString().replace("T", " ").slice(0, 16),
               updated_at: data.created_at ? new Date(data.created_at).toISOString().replace("T", " ").slice(0, 16) : new Date().toISOString().replace("T", " ").slice(0, 16),
             };
+
+            // Log best-effort: jangan gagalkan lacak tiket bila tabel bermasalah.
+            try {
+              const { data: logs } = await supabase
+                .from("verification_logs")
+                .select("*")
+                .eq("ticket_id", data.id)
+                .order("created_at", { ascending: true });
+              found.riwayat = buildPublicTimeline(found, Array.isArray(logs) ? logs : []);
+            } catch {
+              found.riwayat = buildPublicTimeline(found);
+            }
           }
         } catch (dbErr) {
           console.warn("Supabase ticket query warning:", dbErr);
@@ -1269,6 +1327,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
             created_at: memTicket.created_at,
             updated_at: memTicket.updated_at,
           };
+          found.riwayat = buildPublicTimeline(found);
         }
       }
 

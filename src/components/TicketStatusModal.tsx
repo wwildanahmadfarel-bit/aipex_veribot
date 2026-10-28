@@ -4,12 +4,50 @@ import { Ticket } from "../types";
 import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
 import { getTicketStatusInfo } from "../lib/ticketStatus";
 import { buildTicketFollowUp } from "../lib/recommendations";
+import { formatTicketDate } from "../lib/monthLabels";
 import { RecommendationCard } from "./RecommendationCard";
 
 interface TicketStatusModalProps {
   ticket: Ticket | null;
   isOpen: boolean;
   onClose: () => void;
+}
+
+const TIMELINE_LABELS: Record<string, string> = {
+  DITERIMA: "Tiket diterbitkan",
+  PENDING: "Tiket diterbitkan",
+  MENUNGGU: "Menunggu verifikasi petugas",
+  BERHASIL: "Lolos pra-pemeriksaan",
+  BURAM: "Diterima — verifikasi loket",
+  REVISI: "Diterima — verifikasi loket",
+  PERLU_PERBAIKAN: "Diminta perbaikan berkas",
+  DISETUJUI: "Disetujui petugas",
+  APPROVED: "Disetujui petugas",
+  DITOLAK: "Ditolak petugas",
+  REJECTED: "Ditolak petugas",
+  TIDAK_VALID: "Ditolak — bukan dokumen kependudukan",
+};
+
+function timelineLabel(status: unknown): string {
+  const key = String(status || "").toUpperCase().trim();
+  return TIMELINE_LABELS[key] || key || "Status diperbarui";
+}
+
+function timelineVisual(status: unknown): { icon: string; className: string } {
+  const key = String(status || "").toUpperCase().trim();
+  if (["DISETUJUI", "APPROVED"].includes(key)) {
+    return { icon: "check_circle", className: "bg-emerald-100 text-emerald-600 border-emerald-200" };
+  }
+  if (["DITOLAK", "REJECTED", "TIDAK_VALID"].includes(key)) {
+    return { icon: "cancel", className: "bg-red-100 text-red-600 border-red-200" };
+  }
+  if (["PERLU_PERBAIKAN", "REVISI", "BURAM"].includes(key)) {
+    return { icon: "build", className: "bg-amber-100 text-amber-600 border-amber-200" };
+  }
+  if (["MENUNGGU", "BERHASIL"].includes(key)) {
+    return { icon: "hourglass_empty", className: "bg-blue-100 text-blue-600 border-blue-200" };
+  }
+  return { icon: "flag", className: "bg-slate-100 text-slate-600 border-slate-200" };
 }
 
 export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, isOpen, onClose }) => {
@@ -42,6 +80,10 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
   const isApproved = statusInfo.isApproved;
   const isRejected = statusInfo.isRejected;
   const isLulusAI = statusInfo.lulusPra;
+  const riwayat =
+    ticket.riwayat && ticket.riwayat.length > 0
+      ? ticket.riwayat
+      : [{ status: "DITERIMA", created_at: ticket.created_at }];
 
   return (
     <div
@@ -49,10 +91,10 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
       onClick={onClose}
     >
       {/* Cetak Resi: hanya kartu status yang tampil di kertas. */}
-      <style>{`@media print { body * { visibility: hidden !important; } #ticketStatusPrintCard, #ticketStatusPrintCard * { visibility: visible !important; } #ticketStatusPrintCard { position: absolute !important; left: 0; top: 0; width: 100% !important; max-width: 100% !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; } #ticketStatusPrintCard .no-print { display: none !important; } }`}</style>
+      <style>{`@media print { body * { visibility: hidden !important; } #ticketStatusPrintCard, #ticketStatusPrintCard * { visibility: visible !important; } #ticketStatusPrintCard { position: absolute !important; left: 0; top: 0; width: 100% !important; max-width: 100% !important; max-height: none !important; overflow: visible !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; } #ticketStatusPrintCard .no-print { display: none !important; } }`}</style>
       <div
         id="ticketStatusPrintCard"
-        className="bg-white max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100"
+        className="bg-white max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl shadow-2xl animate-in zoom-in-95 duration-200 border border-slate-100"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -141,6 +183,54 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
               <span className="text-[11px] text-slate-500 block">Waktu Registrasi:</span>
               <span className="font-code-num text-slate-700">{ticket.created_at}</span>
             </div>
+          </div>
+
+          {/* Riwayat status — aman untuk publik: tanpa identitas petugas. */}
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                Riwayat Status
+              </span>
+              <span className="text-[10px] text-slate-400">{riwayat.length} langkah</span>
+            </div>
+            <ol className="space-y-3" aria-label="Riwayat status tiket">
+              {riwayat.map((item, idx) => {
+                const visual = timelineVisual(item.status);
+                const isLast = idx === riwayat.length - 1;
+                return (
+                  <li key={`${item.status}-${item.created_at}-${idx}`} className="relative pl-8">
+                    {!isLast && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-[11px] top-7 bottom-0 w-px bg-slate-200"
+                      />
+                    )}
+                    <span
+                      className={`absolute left-0 top-0 w-6 h-6 rounded-full border flex items-center justify-center ${visual.className}`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">{visual.icon}</span>
+                    </span>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span
+                        className={`text-xs font-bold ${
+                          isLast ? "text-[#0F172A]" : "text-slate-600"
+                        }`}
+                      >
+                        {timelineLabel(item.status)}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-code-num">
+                        {formatTicketDate(item.created_at)}
+                      </span>
+                    </div>
+                    {item.catatan && (
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                        {item.catatan}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
           </div>
 
           {/* QR & status verifikasi */}

@@ -1,13 +1,21 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { ServiceCatalogItem, PreScreenInitialData } from "../types";
 import { catalogServices } from "../data/servicesData";
 import { OcrPreScreenCard } from "./OcrPreScreenCard";
+import type { TicketHistoryItem } from "../lib/ticketHistory";
+
+// Kamera QR dimuat malas: library html5-qrcode (~350KB) tidak ikut bundle awal.
+const QrScanModal = React.lazy(() =>
+  import("./QrScanModal").then((mod) => ({ default: mod.QrScanModal }))
+);
 
 interface PortalHomeProps {
   onOpenWizard: (serviceName?: string) => void;
   onOpenRequirements: (service: ServiceCatalogItem) => void;
   onCheckTicket: (code: string) => void;
   onProceedFromPreScreen: (data: PreScreenInitialData) => void;
+  ticketHistory: TicketHistoryItem[];
+  onClearTicketHistory: () => void;
 }
 
 export const PortalHome: React.FC<PortalHomeProps> = ({
@@ -15,10 +23,13 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
   onOpenRequirements,
   onCheckTicket,
   onProceedFromPreScreen,
+  ticketHistory,
+  onClearTicketHistory,
 }) => {
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [ticketSearchInput, setTicketSearchInput] = useState<string>("");
+  const [scanOpen, setScanOpen] = useState<boolean>(false);
 
   const countBy = (cat: string) =>
     cat === "all" ? catalogServices.length : catalogServices.filter((s) => s.category === cat).length;
@@ -40,6 +51,15 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
     }
     onCheckTicket(ticketSearchInput.trim());
   };
+
+  const handleScanDetected = useCallback(
+    (kode: string) => {
+      setScanOpen(false);
+      setTicketSearchInput(kode);
+      onCheckTicket(kode);
+    },
+    [onCheckTicket]
+  );
 
   return (
     <div className="flex flex-col w-full space-y-8" id="portalView">
@@ -141,27 +161,78 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
           </div>
         </div>
 
-        <form
-          onSubmit={handleTicketSearch}
-          className="w-full md:w-auto flex-1 max-w-lg flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-500 transition-all"
-        >
-          <span className="material-symbols-outlined text-slate-400 text-[20px] mr-2 shrink-0">
-            search
-          </span>
-          <input
-            type="text"
-            value={ticketSearchInput}
-            onChange={(e) => setTicketSearchInput(e.target.value)}
-            placeholder="Ketik kode tiket Anda di sini..."
-            className="w-full bg-transparent text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
-          />
-          <button
-            type="submit"
-            className="ml-2 px-4 py-2 rounded-lg bg-[#2563eb] text-white font-semibold text-xs hover:bg-blue-700 transition-colors shrink-0 cursor-pointer shadow-xs"
+        <div className="w-full md:w-auto flex-1 max-w-lg flex flex-col gap-3">
+          <form
+            onSubmit={handleTicketSearch}
+            className="w-full flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-500 transition-all"
           >
-            Periksa
-          </button>
-        </form>
+            <span className="material-symbols-outlined text-slate-400 text-[20px] mr-2 shrink-0">
+              search
+            </span>
+            <input
+              type="text"
+              value={ticketSearchInput}
+              onChange={(e) => setTicketSearchInput(e.target.value)}
+              placeholder="Ketik kode tiket Anda di sini..."
+              className="w-full min-w-0 bg-transparent text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => setScanOpen(true)}
+              aria-label="Pindai QR tiket dengan kamera"
+              title="Pindai QR tiket dengan kamera"
+              className="ml-2 min-w-[44px] min-h-[44px] px-2.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 active:bg-slate-100 transition-colors shrink-0 cursor-pointer inline-flex items-center justify-center gap-1.5"
+            >
+              <span className="material-symbols-outlined text-[18px]">qr_code_scanner</span>
+              <span className="hidden sm:inline text-[11px] font-semibold">Scan QR</span>
+            </button>
+            <button
+              type="submit"
+              className="ml-2 px-4 py-2 rounded-lg bg-[#2563eb] text-white font-semibold text-xs hover:bg-blue-700 transition-colors shrink-0 cursor-pointer shadow-xs"
+            >
+              Periksa
+            </button>
+          </form>
+
+          {ticketHistory.length > 0 && (
+            <div className="w-full rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                  Tiket terakhir di perangkat ini
+                </p>
+                <button
+                  type="button"
+                  onClick={onClearTicketHistory}
+                  className="text-[10px] font-semibold text-slate-500 hover:text-red-600 transition-colors cursor-pointer"
+                >
+                  Hapus
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {ticketHistory.map((item) => (
+                  <button
+                    key={item.code}
+                    type="button"
+                    onClick={() => {
+                      setTicketSearchInput(item.code);
+                      onCheckTicket(item.code);
+                    }}
+                    title={`${item.code}${item.service ? ` — ${item.service}` : ""}`}
+                    className="inline-flex items-center gap-1.5 min-h-[44px] px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-[11px] text-slate-700 transition-colors cursor-pointer"
+                  >
+                    <span className="font-code-num font-bold text-[#2563eb]">{item.code}</span>
+                    {item.service && (
+                      <span className="max-w-[150px] truncate text-slate-500">{item.service}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-2">
+                Hanya kode dan layanan; NIK tidak disimpan.
+              </p>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* SIMULASI INTERAKTIF PRA-PEMERIKSAAN DOKUMEN (OCR AI) */}
@@ -540,6 +611,22 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
           </details>
         </div>
       </section>
+
+      {scanOpen && (
+        <React.Suspense
+          fallback={
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#1E293B]/80 p-4">
+              <p className="text-xs text-white">Memuat pemindai kamera…</p>
+            </div>
+          }
+        >
+          <QrScanModal
+            isOpen={scanOpen}
+            onDetected={handleScanDetected}
+            onClose={() => setScanOpen(false)}
+          />
+        </React.Suspense>
+      )}
     </div>
   );
 };

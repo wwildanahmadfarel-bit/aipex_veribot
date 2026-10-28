@@ -114,8 +114,11 @@ Lokasi: `DocumentScanner.tsx` (varian scanner dengan tiket langsung).
 ## 6. Alur Lacak Tiket (Warga)
 
 - Input di `PortalHome` (`lacakSection`) atau tombol katalog → `App.handleCheckTicket(code)` → `GET /api/tickets/:kode_tiket`.
-- Backend cari di Supabase (`ilike kode_tiket`) lalu fallback memori. Mapping status: `BERHASIL→APPROVED`, `BURAM→REVISI`, else `PENDING`. Tambahkan `skor_kejelasan`, `nama`, `catatan`.
-- Sukses → `TicketStatusModal` tampil. Gagal → alert "tidak ditemukan". Contoh seed: `TKT-202609-8410`, `TKT-202508-001`.
+- **Pindai QR publik:** tombol `Scan QR` di samping kolom kode membuka `QrScanModal` (kamera belakang, dimuat malas agar bundle awal tetap ringan). QR tiket tetap berupa teks `TKT-...`, sehingga kartu yang sudah dicetak tetap terbaca tanpa jaringan. Jika kamera ditolak/tidak ada, warga diarahkan mengetik kode manual.
+- Backend cari di Supabase (`ilike kode_tiket`) lalu fallback memori. Mapping status publik: `BERHASIL→MENUNGGU`, `BURAM→REVISI`, `PENDING→MENUNGGU`, keputusan petugas tetap `DISETUJUI/DITOLAK/PERLU_PERBAIKAN`. Tambahkan `skor_kejelasan`, `nama`, `catatan`.
+- **Riwayat status (timeline):** respons menyertakan `riwayat[]` opsional dari `verification_logs` (status, waktu, catatan). Hanya status, waktu, dan catatan yang dikirim — tanpa `officer_id`, log rollback WA, atau penanda purge foto. Tiket lama tanpa log tetap menampilkan langkah "Tiket diterbitkan".
+- **Riwayat lokal perangkat:** maksimal 5 tiket, TTL 30 hari, disimpan di `localStorage` (`aipex_ticket_history_v1`). Hanya kode, layanan, dan tanggal — NIK, nama, HP, alamat, dan foto tidak pernah disimpan. Tombol `Hapus` membersihkan riwayat.
+- Sukses → `TicketStatusModal` tampil (termasuk timeline). Gagal → alert "tidak ditemukan". Contoh seed: `TKT-202609-8410`, `TKT-202508-001`.
 
 ## 7. Alur Katalog & Syarat Layanan
 
@@ -143,11 +146,18 @@ flowchart TD
   C -- sukses --> F[View officer; access token di memori + cookie refresh HttpOnly]
   E --> F
   C -- gagal --> G[Pesan generik: username atau password salah]
-  F --> H[AdminDashboard: daftar tiket, filter PENDING]
+  F --> H[AdminDashboard: daftar tiket, filter status + layanan + umur tunggu]
   H --> I[1-klik APPROVED / REJECTED / REVISI + catatan_petugas]
   I --> J[PATCH /api/admin/tickets]
   J --> K[Status terupdate + warga bisa lacak ulang]
 ```
+
+Filter dashboard petugas:
+
+- **Status:** tombol cepat `SEMUA/PENDING/MENUNGGU/BERHASIL/DISETUJUI/DITOLAK/BURAM/PERLU_PERBAIKAN`.
+- **Layanan:** dropdown dari nilai unik `jenis_dokumen` yang benar-benar ada di data (bukan daftar hard-code), sehingga layanan lama tetap bisa disaring.
+- **Umur tunggu:** hanya berlaku untuk tiket yang masih pending (`Menunggu > 1/2/7 hari`). Tiket pending berumur ≥ 2 hari otomatis diberi badge `Menunggu N hari` di tabel dan kartu mobile.
+- **Reset** mengembalikan pencarian, status, layanan, dan umur ke default. Jumlah hasil selalu ditampilkan (`Menampilkan X dari Y tiket`).
 
 Saat halaman di-reload, access token di memori hilang dan frontend memanggil
 `POST /api/admin/refresh` memakai cookie `aipex_refresh` (HttpOnly). Logout dan
@@ -177,7 +187,7 @@ Quick chips: Jam Loket, Syarat KTP Hilang, Fast-Track, link Testimoni Google For
 | `GET /api/providers` | `api/providers.ts` | Daftar AI provider tanpa bocor key |
 | `POST /api/ocr`, `POST /api/scan-document` | `api/ocr.ts`, `api/scan-document.ts` → `_lib/ocr-handler.ts` | OCR Vision + buat tiket otomatis jika valid |
 | `GET /api/tickets`, `POST /api/tickets` | `api/tickets.ts` | List + buat tiket wizard (dengan bukti scan) |
-| `GET /api/tickets/:kode` | `api/tickets/[kode].ts` | Lacak 1 tiket |
+| `GET /api/tickets/:kode` | `api/tickets/[id].ts` | Lacak 1 tiket + `riwayat[]` publik (tanpa identitas petugas) |
 | `POST /api/chat-faq` | `api/chat-faq.ts` | Chatbot FAQ |
 | `POST /api/admin/login`, `GET/PATCH /api/admin/tickets` | `api/admin/*`, `api/officer/*` | Auth petugas + kelola tiket |
 | Lokal dev `npm run dev` | `server.ts` (tsx Express + Vite middleware, multer memory 10MB) | Mirror logic yang sama untuk dev |

@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { AipexLogo } from './AipexLogo';
 import AdminMonthlyChart from './AdminMonthlyChart';
-import { BULAN_PANJANG, isApprovedStatus, isRejectedStatus, parseTicketMonth } from '../lib/monthLabels';
+import { BULAN_PANJANG, isApprovedStatus, isPendingStatus, isRejectedStatus, parseTicketMonth } from '../lib/monthLabels';
 import { downloadTicketQrPng } from '../lib/ticketQr';
 import {
   authFetch,
@@ -67,6 +67,28 @@ export interface AdminDashboardProps {
 // Sebelumnya getMockTickets() menutupi data kosong dengan 3 tiket + foto Unsplash.
 function getEmptyTickets(): Ticket[] {
   return [];
+}
+
+/** Umur tiket dalam hari penuh; null bila tanggal tidak valid. */
+function ticketAgeDays(raw: unknown): number | null {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const d = new Date(s.includes(' ') && !s.includes('T') ? s.replace(' ', 'T') : s);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000));
+}
+
+/** Badge kecil untuk tiket pending yang sudah menunggu >= 2 hari. */
+function WaitingAgeBadge({ status, createdAt }: { status: string; createdAt: string }) {
+  if (!isPendingStatus(status)) return null;
+  const days = ticketAgeDays(createdAt);
+  if (days === null || days < 2) return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold whitespace-nowrap">
+      <Clock className="w-3 h-3" />
+      Menunggu {days} hari
+    </span>
+  );
 }
 
 /** Viewer foto sementara tiket (didekripsi server per-request, no-store).
@@ -275,6 +297,8 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('SEMUA');
+  const [filterService, setFilterService] = useState<string>('SEMUA');
+  const [filterAge, setFilterAge] = useState<string>('SEMUA');
   
   // State Modal Detail & Action
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
@@ -286,6 +310,8 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     setScanOpen(false);
     setSearchQuery(kode);
     setFilterStatus('SEMUA');
+    setFilterService('SEMUA');
+    setFilterAge('SEMUA');
     const found = tickets.find(
       (t) => String(t.kode_tiket || '').toUpperCase() === kode.toUpperCase()
     );
@@ -481,14 +507,44 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     }
   };
 
-  // Filter Tiket berdasarkan Pencarian & Tab Status
-  const filteredTickets = tickets.filter(t => {
-    const matchSearch = (t.kode_tiket || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        (t.nama || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        (t.nik || '').includes(searchQuery);
-    const matchFilter = filterStatus === 'SEMUA' ? true : t.status_verifikasi === filterStatus;
-    return matchSearch && matchFilter;
-  });
+  // Opsi filter layanan diambil dari nilai unik yang benar-benar ada di data.
+  const serviceOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        tickets
+          .map((t) => String(t.jenis_dokumen || '').trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, 'id'));
+  }, [tickets]);
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setFilterStatus('SEMUA');
+    setFilterService('SEMUA');
+    setFilterAge('SEMUA');
+  };
+
+  // Filter Tiket berdasarkan Pencarian, Status, Layanan, dan Umur Tunggu.
+  const filteredTickets = useMemo(() => {
+    const query = searchQuery.toLowerCase();
+    const ageThreshold = filterAge === 'SEMUA' ? null : Number(filterAge);
+    return tickets.filter((t) => {
+      const matchSearch =
+        (t.kode_tiket || '').toLowerCase().includes(query) ||
+        (t.nama || '').toLowerCase().includes(query) ||
+        (t.nik || '').includes(searchQuery);
+      const matchStatus = filterStatus === 'SEMUA' || t.status_verifikasi === filterStatus;
+      const matchService = filterService === 'SEMUA' || t.jenis_dokumen === filterService;
+      let matchAge = true;
+      if (ageThreshold !== null) {
+        const age = ticketAgeDays(t.created_at);
+        matchAge =
+          isPendingStatus(t.status_verifikasi) && age !== null && age > ageThreshold;
+      }
+      return matchSearch && matchStatus && matchService && matchAge;
+    });
+  }, [tickets, searchQuery, filterStatus, filterService, filterAge]);
 
   // Count Metrics — sinkron dengan Header/App: PENDING juga dihitung perlu verifikasi.
   const totalPending = tickets.filter(t => ['PENDING', 'MENUNGGU', 'BERHASIL', 'BURAM', 'REVISI', 'PERLU_PERBAIKAN'].includes(String(t.status_verifikasi || '').toUpperCase())).length;
@@ -822,58 +878,101 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
         </div>
 
         {/* FILTER & SEARCH BAR */}
-        <div id="adminToolbar" className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="relative flex-1 max-w-md flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-              <input
-                id="adminSearchInput"
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari NIK, Nama Warga, atau Kode Tiket..."
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-              />
+        <div id="adminToolbar" className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-3">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-md flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <input
+                  id="adminSearchInput"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Cari NIK, Nama Warga, atau Kode Tiket..."
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+                />
+              </div>
+              <button
+                id="adminScanBtn"
+                type="button"
+                onClick={() => setScanOpen(true)}
+                aria-label="Pindai QR tiket dengan kamera"
+                title="Pindai QR tiket dengan kamera"
+                className="min-w-[44px] min-h-[44px] px-3 rounded-xl bg-[#2563EB] hover:bg-blue-700 active:bg-blue-800 text-white inline-flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer shrink-0"
+              >
+                <Camera className="w-5 h-5" />
+                <span className="hidden sm:inline text-xs font-semibold">Scan</span>
+              </button>
             </div>
-            <button
-              id="adminScanBtn"
-              type="button"
-              onClick={() => setScanOpen(true)}
-              aria-label="Pindai QR tiket dengan kamera"
-              title="Pindai QR tiket dengan kamera"
-              className="min-w-[44px] min-h-[44px] px-3 rounded-xl bg-[#2563EB] hover:bg-blue-700 active:bg-blue-800 text-white inline-flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer shrink-0"
-            >
-              <Camera className="w-5 h-5" />
-              <span className="hidden sm:inline text-xs font-semibold">Scan</span>
-            </button>
+
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
+              <Filter className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
+              {(['SEMUA', 'PENDING', 'MENUNGGU', 'BERHASIL', 'DISETUJUI', 'DITOLAK', 'BURAM', 'PERLU_PERBAIKAN'] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setFilterStatus(status)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                    filterStatus === status
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {status}
+                </button>
+              ))}
+
+              <button
+                id="adminRefreshBtn"
+                type="button"
+                onClick={fetchTickets}
+                className="p-2 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-600 rounded-xl transition ml-2 cursor-pointer"
+                title="Refresh Data"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-600' : ''}`} />
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
-            <Filter className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
-            {(['SEMUA', 'PENDING', 'MENUNGGU', 'BERHASIL', 'DISETUJUI', 'DITOLAK', 'BURAM', 'PERLU_PERBAIKAN'] as const).map((status) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => setFilterStatus(status)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
-                  filterStatus === status
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-slate-100 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Filter layanan"
+                value={filterService}
+                onChange={(e) => setFilterService(e.target.value)}
+                className="h-9 max-w-full sm:max-w-[260px] px-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs font-semibold text-slate-700 outline-none cursor-pointer"
               >
-                {status}
-              </button>
-            ))}
+                <option value="SEMUA">Semua layanan</option>
+                {serviceOptions.map((service) => (
+                  <option key={service} value={service}>{service}</option>
+                ))}
+              </select>
 
-            <button
-              id="adminRefreshBtn"
-              type="button"
-              onClick={fetchTickets}
-              className="p-2 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-600 rounded-xl transition ml-2 cursor-pointer"
-              title="Refresh Data"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-600' : ''}`} />
-            </button>
+              <select
+                aria-label="Filter umur tunggu tiket"
+                value={filterAge}
+                onChange={(e) => setFilterAge(e.target.value)}
+                className="h-9 px-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs font-semibold text-slate-700 outline-none cursor-pointer"
+              >
+                <option value="SEMUA">Semua umur</option>
+                <option value="1">Menunggu &gt; 1 hari</option>
+                <option value="2">Menunggu &gt; 2 hari</option>
+                <option value="7">Menunggu &gt; 7 hari</option>
+              </select>
+
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="h-9 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold transition cursor-pointer"
+              >
+                Reset
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-500">
+              Menampilkan <strong className="text-slate-700">{filteredTickets.length}</strong> dari{' '}
+              <strong className="text-slate-700">{tickets.length}</strong> tiket
+            </p>
           </div>
         </div>
 
@@ -932,7 +1031,13 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
                         </span>
                       </td>
                       <td className="py-3.5 px-4">
-                        <StatusBadge status={ticket.status_verifikasi} />
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusBadge status={ticket.status_verifikasi} />
+                          <WaitingAgeBadge
+                            status={ticket.status_verifikasi}
+                            createdAt={ticket.created_at}
+                          />
+                        </div>
                       </td>
                       <td className="py-3.5 px-4 text-slate-500 text-[11px]">
                         {new Date(ticket.created_at).toLocaleDateString('id-ID', {
@@ -973,9 +1078,15 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
           ) : (
             filteredTickets.map((ticket) => (
               <article key={ticket.id} className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <span className="font-mono font-bold text-blue-600 text-xs break-all">{ticket.kode_tiket}</span>
-                  <StatusBadge status={ticket.status_verifikasi} />
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <StatusBadge status={ticket.status_verifikasi} />
+                    <WaitingAgeBadge
+                      status={ticket.status_verifikasi}
+                      createdAt={ticket.created_at}
+                    />
+                  </div>
                 </div>
                 <div>
                   <p className="font-semibold text-[#0F172A] text-sm">{ticket.nama}</p>

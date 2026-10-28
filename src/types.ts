@@ -1,3 +1,10 @@
+/** Satu langkah riwayat status tiket yang aman ditampilkan ke publik. */
+export interface TicketTimelineItem {
+  status: string;
+  catatan?: string;
+  created_at: string;
+}
+
 export interface Ticket {
   id: string;
   ticket_code: string;
@@ -14,6 +21,8 @@ export interface Ticket {
   catatan_petugas?: string;
   created_at: string;
   updated_at: string;
+  /** Riwayat status dari verification_logs (opsional; tiket lama bisa kosong). */
+  riwayat?: TicketTimelineItem[];
 }
 
 export interface ServiceCatalogItem {

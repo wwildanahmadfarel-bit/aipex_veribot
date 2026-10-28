@@ -17,6 +17,12 @@ import FloatingVeriBot from "./components/FloatingVeriBot";
 import { ExitDashboardConfirmModal } from "./components/ExitDashboardConfirmModal";
 import { Ticket, ServiceCatalogItem, PreScreenInitialData } from "./types";
 import { clearOfficerSession, getOfficerName } from "./lib/officerAuth";
+import {
+  clearTicketHistory,
+  loadTicketHistory,
+  rememberTicket,
+  type TicketHistoryItem,
+} from "./lib/ticketHistory";
 
 type AppView = "portal" | "wizard" | "login" | "officer" | "transparansi";
 
@@ -76,6 +82,7 @@ const INITIAL_VIEW: AppView = getInitialView();
 export default function App() {
   const [currentView, setCurrentView] = useState<"portal" | "wizard" | "login" | "officer" | "transparansi">(INITIAL_VIEW);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [ticketHistory, setTicketHistory] = useState<TicketHistoryItem[]>(() => loadTicketHistory());
   const [selectedService, setSelectedService] = useState<string>("Penerbitan KTP-EL Baru / Penggantian");
   const [selectedRequirementService, setSelectedRequirementService] = useState<ServiceCatalogItem | null>(null);
   const [statusModalTicket, setStatusModalTicket] = useState<Ticket | null>(null);
@@ -226,6 +233,7 @@ export default function App() {
       const data = await response.json();
       if (data.success && data.data) {
         setStatusModalTicket(data.data);
+        setTicketHistory(rememberTicket(data.data));
       } else {
         // Search in local state if network delay
         const found = tickets.find(
@@ -233,6 +241,7 @@ export default function App() {
         );
         if (found) {
           setStatusModalTicket(found);
+          setTicketHistory(rememberTicket(found));
         } else {
           alert(`Nomor tiket "${code}" tidak ditemukan dalam sistem Kelurahan Sukamaju. Silakan periksa kembali kode tiket Anda.`);
         }
@@ -244,15 +253,17 @@ export default function App() {
       );
       if (found) {
         setStatusModalTicket(found);
+        setTicketHistory(rememberTicket(found));
       } else {
         alert("Terjadi kesalahan saat memeriksa tiket. Silakan coba sesaat lagi.");
       }
     }
   };
 
-  // Add newly generated ticket
+  // Add newly generated ticket + simpan metadata aman ke riwayat perangkat.
   const handleTicketCreated = (newTicket: Ticket) => {
     setTickets((prev) => [newTicket, ...prev]);
+    setTicketHistory(rememberTicket(newTicket));
   };
 
   // Sinkron dengan AdminDashboard: semua yang butuh verifikasi petugas.
@@ -285,6 +296,11 @@ export default function App() {
             onOpenRequirements={handleOpenRequirements}
             onCheckTicket={handleCheckTicket}
             onProceedFromPreScreen={handleProceedFromPreScreen}
+            ticketHistory={ticketHistory}
+            onClearTicketHistory={() => {
+              clearTicketHistory();
+              setTicketHistory([]);
+            }}
           />
         )}
 

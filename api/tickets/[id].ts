@@ -1,6 +1,80 @@
 import { readJsonBody, setCors } from "../_lib/http.js";
 import { getSupabase, memTickets, toPublicTicket } from "../_lib/store.js";
 import { officerUnauthorized, requireOfficer } from "../_lib/officer-auth.js";
+import { PHOTO_PURGE_AUDIT_NOTE } from "../_lib/file-guard.js";
+
+interface PublicTimelineItem {
+  status: string;
+  catatan?: string;
+  created_at: string;
+}
+
+/** Buang penanda audit internal dari catatan yang tampil ke warga. */
+function cleanPublicNote(raw: unknown): string {
+  return String(raw ?? "")
+    .split(PHOTO_PURGE_AUDIT_NOTE)
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Timeline publik: hanya status, waktu, dan catatan; tanpa officer_id. */
+function buildPublicTimeline(ticket: any, logs: any[] = []): PublicTimelineItem[] {
+  const timeline: PublicTimelineItem[] = [
+    {
+      status: "DITERIMA",
+      created_at: String(ticket?.created_at || ""),
+    },
+  ];
+  const seen = new Set<string>();
+
+  for (const log of logs) {
+    const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
+    // Log rollback adalah audit internal, bukan status final untuk warga.
+    if (/^\[ROLLBACK/i.test(note)) continue;
+    const status = String(log?.status_baru || "").toUpperCase().trim();
+    if (!status) continue;
+    const key = `${status}|${String(log?.created_at || "")}|${note}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    timeline.push({
+      status,
+      catatan: note || undefined,
+      created_at: String(log?.created_at || ""),
+    });
+  }
+
+  // Tiket lama / log gagal ditulis: tetap tampilkan keputusan final bila ada.
+  const current = String(ticket?.status_verifikasi || "").toUpperCase().trim();
+  const finalStatuses = ["DISETUJUI", "APPROVED", "DITOLAK", "REJECTED", "PERLU_PERBAIKAN"];
+  const lastStatus = timeline[timeline.length - 1]?.status;
+  if (finalStatuses.includes(current) && lastStatus !== current) {
+    timeline.push({
+      status: current,
+      catatan: cleanPublicNote(ticket?.catatan_petugas || ticket?.catatan) || undefined,
+      created_at: String(ticket?.updated_at || ticket?.created_at || ""),
+    });
+  }
+
+  return timeline;
+}
+
+async function loadPublicTimeline(supabase: any, ticket: any): Promise<PublicTimelineItem[]> {
+  let logs: any[] = [];
+  if (supabase && ticket?.id) {
+    try {
+      const { data } = await supabase
+        .from("verification_logs")
+        .select("*")
+        .eq("ticket_id", ticket.id)
+        .order("created_at", { ascending: true });
+      logs = Array.isArray(data) ? data : [];
+    } catch {
+      // Log best-effort: jangan gagalkan lacak tiket bila tabel/kolom bermasalah.
+    }
+  }
+  return buildPublicTimeline(ticket, logs);
+}
 
 // GET /api/tickets/:kode → lacak tiket per kode (publik)
 // PATCH /api/tickets/:id → update status (fallback OfficerDashboard lama, WAJIB Bearer petugas)
@@ -21,7 +95,9 @@ export default async function handler(req: any, res: any) {
             .maybeSingle();
           if (!error && data) {
             const found = toPublicTicket(data);
-            return res.json({ success: true, data: found, ticket: found });
+            const riwayat = await loadPublicTimeline(supabase, data);
+            const payload = { ...found, riwayat };
+            return res.json({ success: true, data: payload, ticket: payload });
           }
         } catch (dbErr) {
           console.warn("Supabase ticket query warning:", dbErr);
@@ -35,7 +111,8 @@ export default async function handler(req: any, res: any) {
           // Masking + peta status publik yang sama dengan jalur Supabase (UU PDP):
           // nik_raw/phone/alamat TIDAK boleh ikut keluar.
           const found = toPublicTicket(mem);
-          return res.json({ success: true, data: found, ticket: found });
+          const payload = { ...found, riwayat: buildPublicTimeline(mem) };
+          return res.json({ success: true, data: payload, ticket: payload });
         }
       }
       return res.status(404).json({
