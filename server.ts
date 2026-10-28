@@ -1206,7 +1206,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     ];
     const seen = new Set<string>();
     for (const log of logs) {
-      const note = cleanPublicNote(log?.catatan ?? log?.catatan_petugas);
+      const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
       // Log rollback adalah audit internal, bukan status final untuk warga.
       if (/^\[ROLLBACK/i.test(note)) continue;
       const status = String(log?.status_baru || "").toUpperCase().trim();
@@ -1644,10 +1644,62 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
   app.all("/api/admin/change-password", handleOfficerChangePassword);
 
   // 1. GET: Ambil daftar pengajuan berkas warga untuk petugas (WAJIB Bearer)
+  //    ?logs_for=<id|kode> → riwayat verifikasi satu tiket (paritas produksi).
   app.get("/api/admin/tickets", async (req, res) => {
     const auth = requireOfficer(req);
     if (!auth.ok) return officerUnauthorized(res, auth.error);
     try {
+      const logsFor = String((req.query as any)?.logs_for ?? "").trim();
+      if (logsFor) {
+        if (!supabase) return res.json({ success: true, data: [] });
+        try {
+          const isUuid = (v: string) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+          let ticketId = isUuid(logsFor) ? logsFor : "";
+          if (!ticketId) {
+            const { data: row } = await supabase
+              .from("tickets")
+              .select("id")
+              .eq("kode_tiket", logsFor)
+              .maybeSingle();
+            ticketId = String((row as any)?.id || "");
+          }
+          if (!ticketId) return res.json({ success: true, data: [] });
+
+          const { data: logs, error: logsError } = await supabase
+            .from("verification_logs")
+            .select("id,status_sebelumnya,status_baru,catatan_petugas,created_at")
+            .eq("ticket_id", ticketId)
+            .order("created_at", { ascending: true });
+          if (logsError) {
+            console.warn("[admin/tickets GET] verification_logs warning:", logsError);
+            return res.json({ success: true, data: [] });
+          }
+
+          const data = (logs || []).map((log: any) => {
+            const rawNote = String(log?.catatan_petugas ?? "");
+            const fotoDihapus = rawNote.includes(PHOTO_PURGE_AUDIT_NOTE);
+            const catatan = rawNote
+              .split(PHOTO_PURGE_AUDIT_NOTE)
+              .join("")
+              .replace(/\s+/g, " ")
+              .trim();
+            return {
+              id: log?.id,
+              status_sebelumnya: log?.status_sebelumnya || null,
+              status_baru: log?.status_baru || "",
+              catatan: catatan || null,
+              foto_dihapus: fotoDihapus,
+              created_at: log?.created_at || "",
+            };
+          });
+          return res.json({ success: true, data });
+        } catch (logErr) {
+          console.warn("[admin/tickets GET] verification_logs warning:", logErr);
+          return res.json({ success: true, data: [] });
+        }
+      }
+
       if (supabase) {
         try {
           const { data: dbTickets, error } = await supabase
@@ -1784,7 +1836,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
                   officer_id: officerId,
                   status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
                   status_baru: status,
-                  catatan: auditNote,
+                  catatan_petugas: auditNote,
                 },
               ]);
             } catch (logErr) {
@@ -1856,7 +1908,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
                   status_baru: isValidLogStatus(currentTicket?.status_verifikasi)
                     ? currentTicket.status_verifikasi
                     : "PERLU_PERBAIKAN",
-                  catatan: `[ROLLBACK WA GAGAL] ${String(waErr?.message || waErr).slice(0, 200)}`,
+                  catatan_petugas: `[ROLLBACK WA GAGAL] ${String(waErr?.message || waErr).slice(0, 200)}`,
                 },
               ]);
             } catch {}

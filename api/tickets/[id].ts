@@ -29,7 +29,7 @@ function buildPublicTimeline(ticket: any, logs: any[] = []): PublicTimelineItem[
   const seen = new Set<string>();
 
   for (const log of logs) {
-    const note = cleanPublicNote(log?.catatan ?? log?.catatan_petugas);
+    const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
     // Log rollback adalah audit internal, bukan status final untuk warga.
     if (/^\[ROLLBACK/i.test(note)) continue;
     const status = String(log?.status_baru || "").toUpperCase().trim();

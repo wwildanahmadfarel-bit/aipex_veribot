@@ -6,6 +6,7 @@ import { PHOTO_PURGE_AUDIT_NOTE } from "../_lib/file-guard.js";
 import { hapusFotoTiket } from "../_lib/tiket-foto.js";
 
 // GET /api/admin/tickets — daftar pengajuan untuk petugas (WAJIB Bearer)
+// GET /api/admin/tickets?logs_for=<id|kode> — riwayat verifikasi satu tiket (WAJIB Bearer)
 // PATCH /api/admin/tickets — ubah status + catat verification_logs (WAJIB Bearer)
 export default async function handler(req: any, res: any) {
   if (setCors(req, res)) return;
@@ -15,6 +16,61 @@ export default async function handler(req: any, res: any) {
     const auth = requireOfficer(req);
     if (!auth.ok) return officerUnauthorized(res, auth.error);
     try {
+      // Viewer audit petugas: riwayat keputusan satu tiket. Tetap di fungsi
+      // yang sama agar tidak menambah Serverless Function.
+      const logsFor = String(req.query?.logs_for ?? "").trim();
+      if (logsFor) {
+        if (!supabase) return res.json({ success: true, data: [] });
+        try {
+          const isUuid = (v: string) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+          let ticketId = isUuid(logsFor) ? logsFor : "";
+          if (!ticketId) {
+            const { data: row } = await supabase
+              .from("tickets")
+              .select("id")
+              .eq("kode_tiket", logsFor)
+              .maybeSingle();
+            ticketId = String((row as any)?.id || "");
+          }
+          if (!ticketId) return res.json({ success: true, data: [] });
+
+          const { data: logs, error: logsError } = await supabase
+            .from("verification_logs")
+            .select("id,status_sebelumnya,status_baru,catatan_petugas,created_at")
+            .eq("ticket_id", ticketId)
+            .order("created_at", { ascending: true });
+          if (logsError) {
+            console.warn("[admin/tickets GET] verification_logs warning:", logsError);
+            return res.json({ success: true, data: [] });
+          }
+
+          // Penanda purge internal tidak perlu tampil mentah di UI; kirim
+          // sebagai flag agar dashboard bisa menampilkan badge audit.
+          const data = (logs || []).map((log: any) => {
+            const rawNote = String(log?.catatan_petugas ?? "");
+            const fotoDihapus = rawNote.includes(PHOTO_PURGE_AUDIT_NOTE);
+            const catatan = rawNote
+              .split(PHOTO_PURGE_AUDIT_NOTE)
+              .join("")
+              .replace(/\s+/g, " ")
+              .trim();
+            return {
+              id: log?.id,
+              status_sebelumnya: log?.status_sebelumnya || null,
+              status_baru: log?.status_baru || "",
+              catatan: catatan || null,
+              foto_dihapus: fotoDihapus,
+              created_at: log?.created_at || "",
+            };
+          });
+          return res.json({ success: true, data });
+        } catch (logErr) {
+          console.warn("[admin/tickets GET] verification_logs warning:", logErr);
+          return res.json({ success: true, data: [] });
+        }
+      }
+
       if (supabase) {
         try {
           const { data: dbTickets, error } = await supabase
@@ -138,7 +194,7 @@ export default async function handler(req: any, res: any) {
                   officer_id: officerId,
                   status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
                   status_baru: status,
-                  catatan: auditNote,
+                  catatan_petugas: auditNote,
                 },
               ]);
             } catch {}
@@ -189,12 +245,12 @@ export default async function handler(req: any, res: any) {
                   ticket_id: updatedTicket?.id,
                   officer_id: officerId,
                   // status_baru wajib lolos CHECK: pakai status pulihan yang valid,
-                  // alasan rollback dicatat di kolom catatan (skema aktual).
+                  // alasan rollback dicatat di kolom catatan_petugas (skema aktual).
                   status_sebelumnya: isValidLogStatus(status) ? status : "DITOLAK",
                   status_baru: isValidLogStatus(currentTicket?.status_verifikasi)
                     ? currentTicket.status_verifikasi
                     : "PERLU_PERBAIKAN",
-                  catatan: `[ROLLBACK WA GAGAL] ${reason}`,
+                  catatan_petugas: `[ROLLBACK WA GAGAL] ${reason}`,
                 },
               ]);
             } catch {}

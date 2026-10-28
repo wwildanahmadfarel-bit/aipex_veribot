@@ -52,6 +52,21 @@ export interface Ticket {
   file_url?: string;
 }
 
+interface VerificationLog {
+  id?: string;
+  status_sebelumnya?: string | null;
+  status_baru: string;
+  catatan?: string | null;
+  foto_dihapus?: boolean;
+  created_at: string;
+}
+
+const VERIFICATION_STATUS_LABEL: Record<string, string> = {
+  DISETUJUI: 'Disetujui',
+  DITOLAK: 'Ditolak',
+  PERLU_PERBAIKAN: 'Minta Perbaikan',
+};
+
 export interface Officer {
   id: string;
   nama: string;
@@ -76,6 +91,15 @@ function ticketAgeDays(raw: unknown): number | null {
   const d = new Date(s.includes(' ') && !s.includes('T') ? s.replace(' ', 'T') : s);
   if (Number.isNaN(d.getTime())) return null;
   return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000));
+}
+
+/** Format tanggal log verifikasi; fallback ke teks asli bila tidak valid. */
+function formatLogDate(raw: unknown): string {
+  const s = String(raw || '').trim();
+  if (!s) return '—';
+  const d = new Date(s.includes(' ') && !s.includes('T') ? s.replace(' ', 'T') : s);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 /** Badge kecil untuk tiket pending yang sudah menunggu >= 2 hari. */
@@ -304,6 +328,9 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [actionNotes, setActionNotes] = useState<string>('');
   const [processingId, setProcessingId] = useState<string | null>(null);
+  // Riwayat verifikasi (audit petugas) untuk tiket yang sedang dibuka.
+  const [verificationLogs, setVerificationLogs] = useState<VerificationLog[]>([]);
+  const [logsState, setLogsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   // Modal kamera pemindai QR tiket.
   const [scanOpen, setScanOpen] = useState<boolean>(false);
   const handleScanDetected = (kode: string) => {
@@ -383,6 +410,45 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     setOfficer(null);
     setMustChangePassword(false);
   };
+
+  // Muat riwayat verifikasi saat modal detail dibuka. Endpoint tetap sama
+  // (/api/admin/tickets?logs_for=...) agar tidak menambah Serverless Function.
+  useEffect(() => {
+    if (!selectedTicket) {
+      setVerificationLogs([]);
+      setLogsState('idle');
+      return;
+    }
+    let alive = true;
+    (async () => {
+      setLogsState('loading');
+      setVerificationLogs([]);
+      try {
+        const res = await authFetch(
+          `/api/admin/tickets?logs_for=${encodeURIComponent(selectedTicket.id)}`
+        );
+        if (!alive) return;
+        if (res.status === 401) {
+          handleUnauthorized();
+          setLogsState('error');
+          return;
+        }
+        const result = await res.json();
+        if (!alive) return;
+        if (result.success && Array.isArray(result.data)) {
+          setVerificationLogs(result.data);
+          setLogsState('ready');
+        } else {
+          setLogsState('error');
+        }
+      } catch {
+        if (alive) setLogsState('error');
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [selectedTicket?.id]);
 
   // Fetch Daftar Tiket dari API Backend (tanpa mock agar data jujur)
   const [fetchError, setFetchError] = useState<string>("");
@@ -1224,6 +1290,86 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
                   </div>
                 </div>
 
+              </div>
+
+              {/* RIWAYAT VERIFIKASI (audit petugas) */}
+              <div className="rounded-xl border border-slate-200 bg-white p-3.5">
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Riwayat Verifikasi
+                  </label>
+                  {logsState === 'ready' && (
+                    <span className="text-[10px] text-slate-400">
+                      {verificationLogs.length} catatan
+                    </span>
+                  )}
+                </div>
+                {logsState === 'loading' ? (
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Memuat riwayat...</span>
+                  </div>
+                ) : logsState === 'error' ? (
+                  <p className="text-xs text-red-600">
+                    Riwayat verifikasi gagal dimuat. Tutup lalu buka ulang detail tiket.
+                  </p>
+                ) : verificationLogs.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    Belum ada keputusan petugas untuk tiket ini.
+                  </p>
+                ) : (
+                  <ol className="space-y-3" aria-label="Riwayat verifikasi tiket">
+                    {verificationLogs.map((log, idx) => {
+                      const statusKey = String(log.status_baru || '').toUpperCase();
+                      const isLast = idx === verificationLogs.length - 1;
+                      const visual =
+                        statusKey === 'DISETUJUI'
+                          ? { Icon: CheckCircle2, className: 'bg-emerald-100 text-emerald-600 border-emerald-200' }
+                          : statusKey === 'DITOLAK'
+                          ? { Icon: XCircle, className: 'bg-red-100 text-red-600 border-red-200' }
+                          : { Icon: AlertCircle, className: 'bg-amber-100 text-amber-600 border-amber-200' };
+                      const Icon = visual.Icon;
+                      return (
+                        <li key={log.id || `${log.created_at}-${idx}`} className="relative pl-8">
+                          {!isLast && (
+                            <span
+                              aria-hidden="true"
+                              className="absolute left-[11px] top-7 bottom-0 w-px bg-slate-200"
+                            />
+                          )}
+                          <span
+                            className={`absolute left-0 top-0 w-6 h-6 rounded-full border flex items-center justify-center ${visual.className}`}
+                          >
+                            <Icon className="w-3.5 h-3.5" />
+                          </span>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span className="text-xs font-bold text-slate-700">
+                              {VERIFICATION_STATUS_LABEL[statusKey] || statusKey || 'Status diperbarui'}
+                            </span>
+                            {log.status_sebelumnya && (
+                              <span className="text-[10px] text-slate-400">
+                                dari {String(log.status_sebelumnya).toUpperCase()}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {formatLogDate(log.created_at)}
+                            </span>
+                          </div>
+                          {log.catatan && (
+                            <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed whitespace-pre-wrap">
+                              {log.catatan}
+                            </p>
+                          )}
+                          {log.foto_dihapus && (
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-semibold">
+                              Foto dokumen sudah di-purge
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
               </div>
 
               {/* INPUT CATATAN PETUGAS */}

@@ -152,6 +152,10 @@ flowchart TD
   J --> K[Status terupdate + warga bisa lacak ulang]
 ```
 
+Detail tiket menampilkan **Riwayat Verifikasi** dari
+`GET /api/admin/tickets?logs_for=<id|kode>` (wajib Bearer). Respons hanya berisi
+status, waktu, catatan, dan badge purge — tanpa identitas petugas.
+
 Filter dashboard petugas:
 
 - **Status:** tombol cepat `SEMUA/PENDING/MENUNGGU/BERHASIL/DISETUJUI/DITOLAK/BURAM/PERLU_PERBAIKAN`.
@@ -201,7 +205,7 @@ pertanyaan katalog, guardrail kata utuh, dan klarifikasi pertanyaan multi-topik.
 | `POST /api/tickets` | `api/tickets.ts` | Buat tiket wizard (dengan bukti scan). `GET /api/tickets` tanpa kode ditolak `400 TICKET_CODE_REQUIRED` |
 | `GET /api/tickets/:kode` | `api/tickets/[id].ts` | Lacak 1 tiket + `riwayat[]` publik (tanpa identitas petugas) |
 | `POST /api/chat-faq` | `api/chat-faq.ts` | Chatbot FAQ |
-| `POST /api/admin/login`, `GET/PATCH /api/admin/tickets` | `api/admin/*`, `api/officer/*` | Auth petugas + kelola tiket |
+| `POST /api/admin/login`, `GET/PATCH /api/admin/tickets` | `api/admin/*`, `api/officer/*` | Auth petugas + kelola tiket + riwayat verifikasi (`?logs_for=`) |
 | Lokal dev `npm run dev` | `server.ts` (tsx Express + Vite middleware, multer memory 10MB) | Mirror logic yang sama untuk dev |
 
 Skema Supabase `tickets` (dari payload): `kode_tiket, nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi (BERHASIL/BURAM), catatan, created_at`. Frontend mapping ke `Ticket { ticket_code, nik_encrypted, nama_warga, status_verifikasi: PENDING/APPROVED/REVISI/REJECTED, skor_ai, status_ai: LULUS/GAGAL }`.
