@@ -1,4 +1,4 @@
-import { FAQ_CATALOG, type FaqEntry } from "../data/faqData";
+import { FAQ_CATALOG, type FaqEntry } from "../data/faqData.js";
 
 export interface FaqMatch {
   entry: FaqEntry;
