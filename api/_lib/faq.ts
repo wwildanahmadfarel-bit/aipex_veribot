@@ -57,7 +57,7 @@ Informasi Resmi Kelurahan Sukamaju:
 - Alamat: Jl. Praja Abdi No. 45, Kecamatan Maju Sejahtera
 - Call Center / WhatsApp: +62 811-2345-6789 | Email: layanan@sukamaju.desa.id
 - Biaya: layanan dasar (KTP-el, KK, KIA, akta, surat pindah, legalisasi) TIDAK dipungut biaya.
-- Waktu proses: KK/akta/surat pindah umumnya 1 hari kerja bila berkas lengkap; KTP-el 1-14 hari kerja tergantung konsolidasi data dan blanko; sinkronisasi NIK sekitar 1x24 jam.
+- Waktu proses: KK/akta/surat pindah umumnya 1-3 hari kerja bila berkas lengkap; KTP-el 1-14 hari kerja tergantung konsolidasi data dan blanko; sinkronisasi NIK sekitar 1x24 jam.
 - KTP-el baru: fotokopi KK, fotokopi akta kelahiran/ijazah, formulir F1.02, perekaman di loket. Tanpa surat pengantar RT/RW (Perpres No. 96 Tahun 2018).
 - KTP-el hilang: surat keterangan kehilangan dari Polsek, fotokopi KK, F1.02. KTP-el rusak: fisik KTP lama, fotokopi KK, F1.02.
 - KK: baru (buku nikah/akta perkawinan, KK asal, KTP-el pasangan); penambahan anggota (KK lama, akta/surat lahir, KTP orang tua); perubahan data (KK lama + dokumen pendukung); hilang (surat kehilangan Polsek); rusak (KK lama).

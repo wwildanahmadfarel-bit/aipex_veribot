@@ -35,13 +35,13 @@ export interface FaqEntry {
   updatedAt: string;
 }
 
-const SOP = "SOP Kelurahan Meruya Selatan (Jakarta Barat)";
+const SOP = "Keputusan Lurah Meruya Selatan No. 1 Tahun 2024 tentang Standar Pelayanan";
 const PERPRES = "Perpres No. 96 Tahun 2018";
 const PDP = "UU No. 27 Tahun 2022 tentang Pelindungan Data Pribadi";
 const UPDATED = "2026-10-28";
 
 export const FAQ_SOURCE_NOTE =
-  "Acuan: Standar Pelayanan Kelurahan Meruya Selatan (Jakarta Barat), Perpres No. 96 Tahun 2018, dan UU No. 27 Tahun 2022. Jawaban disesuaikan dengan alur AIPEX VeriBot Kelurahan Sukamaju.";
+  "Acuan: Keputusan Lurah Meruya Selatan No. 1 Tahun 2024 tentang Standar Pelayanan, Perpres No. 96 Tahun 2018, dan UU No. 27 Tahun 2022. Jawaban disesuaikan dengan alur AIPEX VeriBot Kelurahan Sukamaju.";
 
 export const FAQ_CATALOG: FaqEntry[] = [
   {
@@ -83,7 +83,7 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "💸 **Biaya Layanan:**\n" +
       "Penerbitan KTP-el, KK, KIA, akta kelahiran/kematian/perkawinan, surat pindah, dan legalisasi **tidak dipungut biaya**.\n\n" +
       "⏱️ **Perkiraan waktu proses:**\n" +
-      "• KK, akta, dan surat pindah: umumnya **1 hari kerja** bila berkas lengkap.\n" +
+      "• KK, akta, dan surat pindah: umumnya **1 - 3 hari kerja** bila berkas lengkap.\n" +
       "• KTP-el: perekaman di loket; penerbitan bisa **1 - 14 hari kerja** tergantung konsolidasi data dan blanko.\n" +
       "• Sinkronisasi NIK: konfirmasi pusat sekitar **1 x 24 jam**.\n\n" +
       "Jika ada permintaan pembayaran tidak resmi, laporkan ke petugas atau pimpinan kelurahan.",
@@ -108,7 +108,7 @@ export const FAQ_CATALOG: FaqEntry[] = [
     question: "Berapa lama proses penerbitan dokumen?",
     answer:
       "⏱️ **Perkiraan Waktu Proses:**\n" +
-      "• **KK, akta kelahiran/kematian, surat pindah:** umumnya **1 hari kerja** bila berkas lengkap.\n" +
+      "• **KK, akta kelahiran/kematian, surat pindah:** umumnya **1 - 3 hari kerja** bila berkas lengkap.\n" +
       "• **KTP-el:** perekaman dilakukan di loket; penerbitan bisa **1 - 14 hari kerja** tergantung konsolidasi data dan ketersediaan blanko.\n" +
       "• **Sinkronisasi NIK:** konfirmasi update pusat Dukcapil sekitar **1 x 24 jam**.\n\n" +
       "Waktu pasti diberikan petugas saat verifikasi. Pastikan nomor WhatsApp aktif agar status dapat diinformasikan.",
@@ -194,7 +194,7 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "• **KK hilang:** Surat Keterangan Kehilangan dari Polsek, KTP-el/KK lama bila ada.\n" +
       "• **KK rusak:** KK lama yang rusak dan KTP-el.\n\n" +
       "• Tidak dipungut biaya.\n" +
-      "• Proses umumnya 1 hari kerja bila berkas lengkap.",
+      "• Proses umumnya 1 - 3 hari kerja bila berkas lengkap.",
     keywords: [
       "kk",
       "kartu keluarga",
@@ -239,7 +239,7 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "5. Formulir F2.01.\n\n" +
       "• Tidak dipungut biaya.\n" +
       "• Jika surat lahir tidak ada, dapat dilengkapi SPTJM Kelahiran sesuai ketentuan.\n" +
-      "• Proses umumnya 1 hari kerja bila berkas lengkap.",
+      "• Proses umumnya 1 - 3 hari kerja bila berkas lengkap.",
     keywords: ["akta kelahiran", "akta lahir", "kelahiran", "surat lahir", "sptjm kelahiran"],
     source: SOP,
     updatedAt: UPDATED,
@@ -257,7 +257,7 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "5. Formulir F2.01.\n\n" +
       "• Tidak dipungut biaya.\n" +
       "• Jika surat kematian tidak ada, dapat dilengkapi SPTJM Kematian sesuai ketentuan.\n" +
-      "• Proses umumnya 1 hari kerja bila berkas lengkap.",
+      "• Proses umumnya 1 - 3 hari kerja bila berkas lengkap.",
     keywords: ["akta kematian", "kematian", "surat kematian", "orang meninggal", "sptjm kematian"],
     source: SOP,
     updatedAt: UPDATED,
@@ -291,7 +291,7 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "3. Formulir permohonan pindah F1.08.\n" +
       "4. Alamat tujuan lengkap dengan kode pos.\n\n" +
       "• Tidak dipungut biaya.\n" +
-      "• Proses umumnya 1 hari kerja bila berkas lengkap.\n" +
+      "• Proses umumnya 1 - 3 hari kerja bila berkas lengkap.\n" +
       "• Untuk pindah datang, lampirkan surat pindah dari daerah asal.",
     keywords: ["pindah", "skpwni", "surat pindah", "pindah domisili", "pindah alamat", "pindah datang"],
     source: SOP,
