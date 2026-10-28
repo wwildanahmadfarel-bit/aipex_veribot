@@ -929,6 +929,8 @@ rencana komunikasi ke petugas.
 
 > **Catatan Vercel Hobby:** paket Hobby membatasi 12 Serverless Functions per deployment. Karena itu empat route auth digabung di `api/admin/auth.ts`; `vercel.json` me-rewrite `/api/admin/login`, `/api/admin/refresh`, `/api/admin/logout`, `/api/admin/change-password`, dan alias `/api/officer/login` ke fungsi tersebut. URL publik dan kontrak request/response tidak berubah, dan server lokal tetap mendaftarkan keempat path secara langsung.
 
+> **Catatan warning `DEP0169`:** runtime Vercel `nodejs24.x` (`@vercel/node`) masih memakai `url.parse()` legacy saat membaca `req.query`. Pada cold start, Node menulis `DeprecationWarning: url.parse()` ke `stderr`, sehingga log Vercel memberi label "Error" meskipun respons HTTP normal. Mitigasi sementara di Production: env `NODE_OPTIONS=--disable-warning=DEP0169` (hanya mematikan warning ini, bukan seluruh warning). Setel lewat Project Settings → Environment Variables atau shell; menaruhnya di `.env.local` tidak efektif karena `NODE_OPTIONS` dibaca sebelum dotenv. Hapus env ini setelah runtime Vercel diperbarui (terkait `vercel/vercel#16109`). Verifikasi 28 Okt 2026: deployment `dpl_DpXhpcEv6WtMMvDqC4eUSay6V8n5` menerima request health/login/refresh/logout tanpa `DEP0169`, login dengan kredensial salah tetap `401 INVALID_CREDENTIALS`.
+
 ---
 
 ## 15. Keputusan yang Sengaja Diambil

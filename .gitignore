@@ -19,3 +19,6 @@ eval/demo/
 
 # State lokal Supabase CLI — jangan di-commit
 supabase/.temp/
+
+# Metadata project Vercel saat `vercel link` — jangan di-commit
+.vercel/
