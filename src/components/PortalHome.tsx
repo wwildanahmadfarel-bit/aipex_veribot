@@ -173,7 +173,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
               type="text"
               value={ticketSearchInput}
               onChange={(e) => setTicketSearchInput(e.target.value)}
-              placeholder="Ketik kode tiket Anda di sini..."
+              placeholder="Ketik kode tiket..."
               className="w-full min-w-0 bg-transparent text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
             />
             <button
@@ -228,7 +228,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
                 ))}
               </div>
               <p className="text-[10px] text-slate-400 mt-2">
-                Hanya kode dan layanan; NIK tidak disimpan.
+                Hanya kode, layanan, dan tanggal; NIK tidak disimpan.
               </p>
             </div>
           )}
