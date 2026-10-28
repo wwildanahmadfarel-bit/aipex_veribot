@@ -1315,7 +1315,11 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
                   </p>
                 ) : verificationLogs.length === 0 ? (
                   <p className="text-xs text-slate-500">
-                    Belum ada keputusan petugas untuk tiket ini.
+                    {['DISETUJUI', 'DITOLAK', 'PERLU_PERBAIKAN'].includes(
+                      String(selectedTicket.status_verifikasi || '').toUpperCase()
+                    )
+                      ? 'Status akhir sudah tercatat, tetapi log audit untuk keputusan ini tidak tersedia (kemungkinan diputuskan sebelum logging aktif).'
+                      : 'Belum ada keputusan petugas untuk tiket ini.'}
                   </p>
                 ) : (
                   <ol className="space-y-3" aria-label="Riwayat verifikasi tiket">
