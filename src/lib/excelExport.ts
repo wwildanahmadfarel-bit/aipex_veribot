@@ -1,5 +1,6 @@
 // Ekspor Excel bulanan — dibuat di browser tanpa library & tanpa Serverless Function.
-// Format: satu file .xlsx berisi sheet "Rekap" + satu sheet per layanan yang ada datanya.
+// Format: satu file .xlsx berisi sheet "Rekap" + SEMUA sheet layanan (termasuk
+// yang belum ada tiketnya) agar struktur laporan selalu konsisten.
 // NIK disamarkan secara default; opsi NIK lengkap hanya untuk arsip resmi.
 
 import {
@@ -84,9 +85,7 @@ function groupTickets(tickets: ExcelTicket[]): SheetGroup[] {
     if (!map.has(name)) map.set(name, []);
     map.get(name)!.push(t);
   });
-  return SHEET_ORDER.map((name) => ({ name, tickets: map.get(name) || [] })).filter(
-    (g) => g.tickets.length > 0
-  );
+  return SHEET_ORDER.map((name) => ({ name, tickets: map.get(name) || [] }));
 }
 
 function nikForExport(raw: unknown, samarkan: boolean): string {
@@ -376,9 +375,10 @@ function buildRekapRows(groups: SheetGroup[], samarkanNik: boolean): RowSpec[] {
   });
 
   rows.push([]);
+  const layananBerisi = groups.filter((g) => g.tickets.length > 0).length;
   rows.push([
     { v: "TOTAL", s: S.totalLabel },
-    { v: `${groups.length} layanan`, s: S.totalLabel },
+    { v: `${layananBerisi} dari ${groups.length} layanan berisi`, s: S.totalLabel },
     { v: totalMasuk, s: S.totalNumber },
     { v: totalDisetujui, s: S.totalNumber },
     { v: totalDitolak, s: S.totalNumber },
@@ -445,6 +445,11 @@ function buildDetailRows(group: SheetGroup, samarkanNik: boolean): RowSpec[] {
       { v: t.catatan || "-", s: S.wrap },
     ]);
   });
+
+  // Sheet kosong tetap dibuat dengan header + catatan agar strukturnya jelas.
+  if (group.tickets.length === 0) {
+    rows.push([{ v: "Belum ada tiket layanan ini pada bulan yang dipilih.", s: S.note }]);
+  }
 
   return rows;
 }
@@ -551,7 +556,7 @@ export function buildMonthlyWorkbook(options: ExcelExportOptions): BuiltWorkbook
       xml: buildSheetXml(
         buildDetailRows(g, samarkanNik),
         [5, 18, 17, 20, 24, 16, 30, 36, 10, 14, 26, 40],
-        `A1:L${g.tickets.length + 1}`
+        g.tickets.length > 0 ? `A1:L${g.tickets.length + 1}` : undefined
       ),
     })),
   ];

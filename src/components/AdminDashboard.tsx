@@ -1239,7 +1239,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
                 <p className="font-semibold text-slate-700">
                   Laporan-Layanan-{rekapTahun}-{String(rekapBulan + 1).padStart(2, '0')}.xlsx
                 </p>
-                <p>Sheet <b>Rekap</b> + satu sheet per layanan yang ada datanya.</p>
+                <p>Sheet <b>Rekap</b> + semua sheet layanan, termasuk yang belum ada tiketnya.</p>
                 <p>Kolom: kode tiket, tanggal, NIK, nama, no. HP, alamat, urusan, skor AI, status tiket, status verifikasi, catatan.</p>
                 <p className="text-slate-400">QR tidak dimasukkan sebagai gambar — cukup kode tiket.</p>
               </div>
