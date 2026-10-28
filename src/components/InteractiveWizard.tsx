@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import confetti from "canvas-confetti";
 import { Ticket, VerificationResult, PreScreenInitialData, PreScreenPage } from "../types";
 import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
+import { getTicketStatusInfo } from "../lib/ticketStatus";
 import { AipexLogo } from "./AipexLogo";
 import { JENIS_NIK_OPSIONAL, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
 import { catalogServices } from "../data/servicesData";
@@ -1025,6 +1026,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
     }
   }, [currentStep, generatedTicket]);
 
+  const ticketQrStatus = generatedTicket ? getTicketStatusInfo(generatedTicket) : null;
+
   return (
     <div className="flex flex-col w-full" id="wizardView">
       {/* Sub-bar Navigation */}
@@ -1962,12 +1965,12 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-bold font-heading">
                           {lulus
-                            ? "Dokumen Lulus Pre-Screening (Jalur Fast-Track Siap)"
+                            ? "Diterima — Lolos Pra-Pemeriksaan (Siap Terbit QR)"
                             : bukanKtp
                               ? "File Bukan Kartu Kependudukan Indonesia"
                               : sysErr
                                 ? "Gangguan Sistem — Coba Lagi"
-                                : "Dokumen Memerlukan Perbaikan"}
+                                : "Diterima — Verifikasi Loket"}
                         </h3>
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
@@ -2261,7 +2264,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                           ? networkBawah
                             ? "Koneksi Gagal — Ulangi Pindaian"
                             : "Tiket Diblokir — Bukan Dokumen Kependudukan"
-                          : "Terbitkan Tiket QR Fast-Track"}
+                          : "Terbitkan Tiket QR Antrean"}
                       </span>
                       <span className="material-symbols-outlined text-[18px]">qr_code_2</span>
                     </button>
@@ -2279,7 +2282,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
           </div>
         )}
 
-        {/* STEP 4: TIKET QR CODE FAST-TRACK */}
+        {/* STEP 4: TIKET QR ANTREAN */}
         {currentStep === 4 && generatedTicket && (
           <div className="flex flex-col items-center gap-6 animate-in fade-in duration-300">
             {/* Cetak hanya kartu tiket — sisanya disembunyikan saat print. */}
@@ -2299,8 +2302,24 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     <span className="text-[10px] text-blue-200">Kelurahan Sukamaju • Semarang</span>
                   </div>
                 </div>
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500 text-white font-bold text-[10px] tracking-wider uppercase shadow-xs">
-                  FAST-TRACK PRIORITAS
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-white font-bold text-[9px] sm:text-[10px] tracking-wider uppercase shadow-xs text-center max-w-[170px] leading-tight ${
+                    ticketQrStatus?.isApproved
+                      ? "bg-emerald-600"
+                      : ticketQrStatus?.tone === "green"
+                        ? "bg-emerald-500"
+                        : ticketQrStatus?.tone === "amber"
+                          ? "bg-amber-500"
+                          : "bg-red-500"
+                  }`}
+                >
+                  {ticketQrStatus?.isApproved
+                    ? "DISETUJUI"
+                    : ticketQrStatus?.tone === "green"
+                      ? "DITERIMA — LOLOS PRA-PEMERIKSAAN"
+                      : ticketQrStatus?.tone === "amber"
+                        ? "DITERIMA — VERIFIKASI LOKET"
+                        : "TIDAK DITERIMA"}
                 </span>
               </div>
 
@@ -2335,10 +2354,32 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     {generatedTicket.jenis_dokumen}
                   </span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-3">
+                  <span className="text-blue-200">Status Tiket:</span>
+                  <strong className="text-white">{ticketQrStatus?.statusTiket || "DITERIMA"}</strong>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-blue-200">Verifikasi:</span>
+                  <strong
+                    className={`text-right ${
+                      ticketQrStatus?.tone === "green"
+                        ? "text-emerald-300"
+                        : ticketQrStatus?.tone === "amber"
+                          ? "text-amber-300"
+                          : "text-red-300"
+                    }`}
+                  >
+                    {ticketQrStatus?.verifikasi || "VERIFIKASI LOKET"}
+                  </strong>
+                </div>
+                <div className="flex justify-between gap-3">
                   <span className="text-blue-200">Skor AI Pre-Screening:</span>
-                  <span className={`font-code-num font-bold ${generatedTicket.skor_ai >= 70 ? "text-emerald-300" : "text-amber-300"}`}>
-                    {generatedTicket.skor_ai}% {generatedTicket.skor_ai >= 70 ? "(Lulus Uji Kejelasan)" : "(Verifikasi Ulang di Loket)"}
+                  <span
+                    className={`font-code-num font-bold ${
+                      ticketQrStatus?.lulusPra ? "text-emerald-300" : "text-amber-300"
+                    }`}
+                  >
+                    {generatedTicket.skor_ai}%
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -2349,6 +2390,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
 
               {/* Instructions */}
               <p className="text-[11px] text-center text-blue-200 leading-tight">
+                <b className="text-white">QR ini adalah tiket antrean, bukan bukti dokumen sah.</b>{" "}
+                Petugas tetap memeriksa dokumen asli di loket.
+              </p>
+              <p className="text-[11px] text-center text-blue-200 leading-tight mt-1">
                 Simpan atau cetak tiket ini. Tunjukkan ke verifikator loket untuk langsung dipanggil tanpa
                 mengisi formulir kertas lagi.
               </p>
@@ -2375,8 +2420,15 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const text = `Halo, saya telah melakukan pra-pemeriksaan berkas di AIPEX VeriBot Kelurahan Sukamaju.%0AKode Tiket: ${generatedTicket.ticket_code}%0ANama: ${generatedTicket.nama_warga}%0ALayanan: ${generatedTicket.jenis_dokumen}%0AStatus: Fast-Track Lulus AI (${generatedTicket.skor_ai}%)`;
-                  window.open(`https://wa.me/?text=${text}`, "_blank");
+                  const text = [
+                    "Halo, saya telah melakukan pra-pemeriksaan berkas di AIPEX VeriBot Kelurahan Sukamaju.",
+                    `Kode Tiket: ${generatedTicket.ticket_code}`,
+                    `Nama: ${generatedTicket.nama_warga}`,
+                    `Layanan: ${generatedTicket.jenis_dokumen}`,
+                    `Status Tiket: ${ticketQrStatus?.statusTiket || "DITERIMA"}`,
+                    `Verifikasi: ${ticketQrStatus?.verifikasi || "VERIFIKASI LOKET"} (${generatedTicket.skor_ai}%)`,
+                  ].join("\n");
+                  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
                 }}
                 className="flex-1 min-w-35 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               >

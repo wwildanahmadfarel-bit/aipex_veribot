@@ -212,10 +212,10 @@ export default async function handler(req: any, res: any) {
         ticket: newTicket,
         phoneSaved,
         message: phoneSaved
-          ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA tersimpan."
+          ? "Tiket QR antrean berhasil diterbitkan. Nomor WA tersimpan."
           : phone
-            ? "Tiket Fast-Track berhasil diterbitkan. Nomor WA belum tersimpan di server — petugas akan verifikasi manual."
-            : "Tiket Fast-Track berhasil diterbitkan.",
+            ? "Tiket QR antrean berhasil diterbitkan. Nomor WA belum tersimpan di server — petugas akan verifikasi manual."
+            : "Tiket QR antrean berhasil diterbitkan.",
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err.message });

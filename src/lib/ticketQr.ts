@@ -4,6 +4,7 @@
 // DocumentScanner (layar + cetak). Tidak ada parser format lama di repo.
 
 import QRCode from "qrcode";
+import { getTicketStatusInfo, maskNik } from "./ticketStatus";
 
 export interface QrTicketInput {
   ticket_code?: string;
@@ -21,16 +22,6 @@ export interface QrTicketInput {
   created_at?: string;
 }
 
-/** Samakan dengan label status UI (TicketStatusModal). */
-function qrStatusLabel(raw: unknown): string {
-  const s = String(raw || "").toUpperCase().trim();
-  if (s === "APPROVED" || s === "DISETUJUI" || s === "BERHASIL") return "DISETUJUI";
-  if (s === "REJECTED" || s === "DITOLAK" || s === "TIDAK_VALID") return "DITOLAK";
-  if (s === "REVISI" || s === "BURAM" || s === "PERLU_PERBAIKAN") return "PERLU PERBAIKAN";
-  if (s === "PENDING") return "MENUNGGU VERIFIKASI";
-  return s || "-";
-}
-
 function pickCode(t: QrTicketInput): string {
   return String(t.ticket_code || t.kode_tiket || "-").trim() || "-";
 }
@@ -44,29 +35,28 @@ function pickNama(t: QrTicketInput): string {
 function pickNikMask(t: QrTicketInput): string {
   const masked = String(t.nik_encrypted || "").trim();
   if (masked && /\*/.test(masked)) return masked;
-  const raw = String(t.nik || t.nik_raw || "").replace(/\D/g, "");
-  if (raw.length >= 12) return `${raw.slice(0, 6)}******${raw.slice(-4)}`;
-  if (raw) return `${raw.slice(0, 3)}***${raw.slice(-2)}`;
-  return "-";
+  const raw = String(t.nik || t.nik_raw || "").trim();
+  return raw ? maskNik(raw) : "-";
 }
 
 function pickSkor(t: QrTicketInput): string {
-  const n = Number(t.skor_ai ?? t.skor_kejelasan ?? NaN);
-  if (!Number.isFinite(n)) return "-";
-  const lulus = String(t.status_ai || "").toUpperCase() === "LULUS" || n >= 70;
-  return `${Math.round(n)}%${lulus ? " (Lulus Fast-Track)" : " (Perlu Verifikasi)"}`;
+  const info = getTicketStatusInfo(t);
+  return info.skor === null ? "-" : `${Math.round(info.skor)}%`;
 }
 
 export function buildTicketQrText(t: QrTicketInput): string {
+  const info = getTicketStatusInfo(t);
   return [
     "AIPEX VERIBOT - Kelurahan Sukamaju",
-    `Kode Tiket : ${pickCode(t)}`,
-    `Nama       : ${pickNama(t)}`,
-    `NIK        : ${pickNikMask(t)}`,
-    `Layanan    : ${String(t.jenis_dokumen || "-").trim() || "-"}`,
-    `Skor AI    : ${pickSkor(t)}`,
-    `Status     : ${qrStatusLabel(t.status_verifikasi)}`,
-    `Terbit     : ${String(t.created_at || "-").trim() || "-"}`,
+    `Kode Tiket   : ${pickCode(t)}`,
+    `Nama         : ${pickNama(t)}`,
+    `NIK          : ${pickNikMask(t)}`,
+    `Layanan      : ${String(t.jenis_dokumen || "-").trim() || "-"}`,
+    `Status Tiket : ${info.statusTiket}`,
+    `Verifikasi   : ${info.verifikasi}`,
+    `Skor AI      : ${pickSkor(t)}`,
+    `Terbit       : ${String(t.created_at || "-").trim() || "-"}`,
+    "Catatan      : QR ini tiket antrean, bukan bukti dokumen sah.",
     "Cek status: lacak di portal AIPEX",
   ].join("\n");
 }

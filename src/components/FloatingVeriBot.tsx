@@ -145,10 +145,10 @@ export default function FloatingVeriBot() {
               📄 Syarat KTP Hilang?
             </button>
             <button 
-              onClick={() => handleSendMessage('Bagaimana cara dapat tiket Fast-Track?')}
+              onClick={() => handleSendMessage('Bagaimana cara dapat tiket QR antrean?')}
               className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded-full text-[11px] font-medium whitespace-nowrap transition border border-slate-200/60"
             >
-              ⚡ Fast-Track?
+              🎫 Tiket QR?
             </button>
             <a
               href="https://forms.gle/RT12pHjuLkLnePEz9"

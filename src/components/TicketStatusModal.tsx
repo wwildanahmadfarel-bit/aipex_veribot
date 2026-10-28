@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import QRCode from "qrcode";
 import { Ticket } from "../types";
 import { buildTicketQrText, downloadTicketQrPng } from "../lib/ticketQr";
+import { getTicketStatusInfo } from "../lib/ticketStatus";
 import { buildTicketFollowUp } from "../lib/recommendations";
 import { RecommendationCard } from "./RecommendationCard";
 
@@ -35,16 +36,12 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
 
   // Normalisasi status dari semua sumber: frontend (APPROVED/PENDING/REVISI)
   // + backend admin (BERHASIL/BURAM/DISETUJUI/DITOLAK/PERLU_PERBAIKAN).
-  // + public API (MENUNGGU for PENDING).
+  // + public API (MENUNGGU for PENDING). BERHASIL ≠ disetujui: masih menunggu petugas.
   const rawStatus = String(ticket.status_verifikasi || "").toUpperCase().trim();
-  const isApproved =
-    rawStatus === "APPROVED" || rawStatus === "DISETUJUI" || rawStatus === "BERHASIL";
-  const isPending =
-    rawStatus === "PENDING" || rawStatus === "MENUNGGU" || rawStatus === "BERHASIL";
-  const isRevisi =
-    rawStatus === "REVISI" || rawStatus === "BURAM" || rawStatus === "PERLU_PERBAIKAN";
-  const isRejected = rawStatus === "REJECTED" || rawStatus === "DITOLAK" || rawStatus === "TIDAK_VALID";
-  const isLulusAI = ticket.status_ai === "LULUS" && (ticket.skor_ai ?? 0) >= 70;
+  const statusInfo = getTicketStatusInfo(ticket);
+  const isApproved = statusInfo.isApproved;
+  const isRejected = statusInfo.isRejected;
+  const isLulusAI = statusInfo.lulusPra;
 
   return (
     <div
@@ -86,31 +83,29 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
             className={`p-4 rounded-xl border flex items-start gap-3 ${
               isApproved
                 ? "bg-emerald-50 border-emerald-200 text-emerald-900"
-                : isPending
-                ? "bg-blue-50 border-blue-200 text-blue-900"
                 : isRejected
                 ? "bg-red-50 border-red-200 text-red-900"
+                : isLulusAI
+                ? "bg-blue-50 border-blue-200 text-blue-900"
                 : "bg-amber-50 border-amber-200 text-amber-900"
             }`}
           >
             <span
               className={`material-symbols-outlined text-[24px] shrink-0 mt-0.5 ${
-                isApproved ? "text-emerald-600" : isPending ? "text-[#2563eb]" : isRejected ? "text-red-500" : "text-amber-500"
+                isApproved ? "text-emerald-600" : isRejected ? "text-red-500" : isLulusAI ? "text-[#2563eb]" : "text-amber-500"
               }`}
             >
-              {isApproved ? "check_circle" : isPending ? "hourglass_empty" : isRejected ? "cancel" : "warning"}
+              {isApproved ? "check_circle" : isRejected ? "cancel" : isLulusAI ? "hourglass_empty" : "warning"}
             </span>
             <div className="flex flex-col">
               <span className="font-bold text-xs uppercase tracking-wide">
                 {isApproved
                   ? "Berkas Disetujui (Siap Cetak / Pengambilan)"
-                  : isPending
-                  ? "Menunggu Panggilan Loket (Fast-Track)"
                   : isRejected
                   ? "Berkas Ditolak Petugas"
-                  : isRevisi
-                  ? "Perlu Perbaikan / Verifikasi Ulang di Loket"
-                  : "Perlu Tindak Lanjut / Perbaikan"}
+                  : isLulusAI
+                  ? "Diterima — Lolos Pra-Pemeriksaan (Menunggu Petugas)"
+                  : "Diterima — Verifikasi Loket"}
               </span>
               <p className="text-xs mt-1 leading-relaxed">
                 {ticket.catatan_petugas ||
@@ -148,22 +143,47 @@ export const TicketStatusModal: React.FC<TicketStatusModalProps> = ({ ticket, is
             </div>
           </div>
 
-          {/* QR & Fast Track Badge */}
+          {/* QR & status verifikasi */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-xl border border-slate-200 bg-white">
             <div className="flex flex-col gap-1">
               <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                KARTU TIKET FAST-TRACK
+                KARTU TIKET ANTREAN
               </span>
               <div className="flex items-center gap-2">
-                <span className="font-code-num text-lg font-bold text-emerald-600">
+                <span
+                  className={`font-code-num text-lg font-bold ${
+                    isApproved || isLulusAI
+                      ? "text-emerald-600"
+                      : isRejected
+                      ? "text-red-600"
+                      : "text-amber-600"
+                  }`}
+                >
                   {ticket.skor_ai}%
                 </span>
-                <span className={`px-2 py-0.5 rounded-full font-semibold text-[10px] border ${isLulusAI ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
-                  {isLulusAI ? "Lulus AI Fast-Track" : `Skor AI ${ticket.skor_ai}% • Perlu Verifikasi`}
+                <span
+                  className={`px-2 py-0.5 rounded-full font-semibold text-[10px] border ${
+                    isApproved || isLulusAI
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : isRejected
+                      ? "bg-red-50 text-red-700 border-red-200"
+                      : "bg-amber-50 text-amber-700 border-amber-200"
+                  }`}
+                >
+                  {isApproved
+                    ? "Disetujui Petugas"
+                    : isRejected
+                    ? statusInfo.verifikasi
+                    : isLulusAI
+                    ? "Lolos Pra-Pemeriksaan"
+                    : "Verifikasi Loket"}
                 </span>
               </div>
               <span className="text-[11px] text-slate-500 sm:max-w-[240px]">
                 Tunjukkan QR Code ini ke layar verifikator meja loket kelurahan.
+              </span>
+              <span className="text-[10px] text-slate-400 sm:max-w-[240px]">
+                QR ini tiket antrean, bukan bukti dokumen sah.
               </span>
             </div>
             <div className="p-1 rounded-lg border border-slate-200 bg-white shadow-xs shrink-0 self-center sm:self-auto">

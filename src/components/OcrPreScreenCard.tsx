@@ -1333,7 +1333,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                       ) : (
                         <>
                           <ArrowRight className="w-4 h-4" />
-                          <span>Dokumen Utama Valid (Buram) — Tetap Lanjut ke QR</span>
+                          <span>Diterima — Lanjut dengan Verifikasi Loket</span>
                         </>
                       )}
                     </button>

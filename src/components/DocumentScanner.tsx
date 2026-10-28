@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { PrescreeningResult } from "../types";
 import { buildTicketQrText } from "../lib/ticketQr";
+import { getTicketStatusInfo } from "../lib/ticketStatus";
 import { BUKAN_KTP_MESSAGE } from "../lib/messages";
 import { JENIS_DOKUMEN_VALID, isNikWajib, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
 import {
@@ -56,6 +57,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [manualNik, setManualNik] = useState<string>("");
+  const createdInfo = createdTicket ? getTicketStatusInfo(createdTicket) : null;
 
   const normalizeStatus = (raw: unknown): string => {
     const upper = String(raw ?? "").toUpperCase().trim().replace(/[\s-]+/g, "_");
@@ -433,7 +435,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                       : layak
                         ? "✓ Dokumen Layak — QR Terbit"
                         : buramValid
-                          ? "⚠ Dokumen Valid (Buram) — QR Tetap Terbit"
+                          ? "⚠ Diterima — Verifikasi Loket (QR Terbit)"
                           : "⚠ Kualitas Buram / Kurang Layak"}
                   </span>
                 </div>
@@ -542,7 +544,7 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
                       <span>
                         {layak
                           ? "Dokumen Layak — Lanjut ke Form Mandiri →"
-                          : "Dokumen Valid (Buram) — Tetap Lanjut →"}
+                          : "Diterima — Lanjut dengan Verifikasi Loket →"}
                       </span>
                     </button>
                   ) : tidakValid ? (
@@ -582,14 +584,32 @@ export default function DocumentScanner({ onProceedToForm, className = "" }: Doc
           {/* Header Tiket */}
           <div className="flex justify-between items-start border-b border-slate-800 pb-4">
             <div>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <CheckCircle2 className="w-3 h-3" /> {createdTicket.status_verifikasi}
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${
+                  createdInfo?.tone === "amber"
+                    ? "bg-amber-500/10 text-amber-300 border-amber-500/20"
+                    : createdInfo?.tone === "red"
+                      ? "bg-red-500/10 text-red-300 border-red-500/20"
+                      : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                }`}
+              >
+                <CheckCircle2 className="w-3 h-3" />{" "}
+                {createdInfo?.statusTiket || createdTicket.status_verifikasi}
               </span>
-              <h3 className="text-lg font-bold text-white mt-2">Tiket Layanan Fast-Track</h3>
-              <p className="text-xs text-slate-400">Scan QR Code ini pada scanner loket kelurahan</p>
-              {createdTicket.status_verifikasi === "BURAM" && (
+              <h3 className="text-lg font-bold text-white mt-2">
+                {createdInfo?.tone === "amber"
+                  ? "Tiket Layanan — Verifikasi Loket"
+                  : createdInfo?.tone === "red"
+                    ? "Tiket Layanan — Tidak Diterima"
+                    : "Tiket Layanan — Lolos Pra-Pemeriksaan"}
+              </h3>
+              <p className="text-xs text-slate-400">
+                Scan QR Code ini pada scanner loket kelurahan. QR tiket antrean, bukan bukti dokumen sah.
+              </p>
+              {createdInfo?.tone === "amber" && (
                 <p className="text-[11px] text-amber-300 mt-1">
-                  Dokumen buram — QR tetap berlaku, bawa fisik dokumen asli untuk verifikasi ulang.
+                  Diterima dengan catatan kualitas — QR tetap berlaku, bawa fisik dokumen asli untuk
+                  verifikasi di loket.
                 </p>
               )}
             </div>

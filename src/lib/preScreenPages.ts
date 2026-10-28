@@ -168,7 +168,7 @@ export function composeOcrReason(args: {
     return (
       `Terdeteksi ${label} asli yang valid (skor kejelasan ${args.skor}/100, ambang lolos 70). ` +
       `${nikInfo} ${namaInfo} ` +
-      (args.saranAi || "Dokumen layak — lanjut ke formulir untuk terbit QR Fast-Track.")
+      (args.saranAi || "Dokumen layak — lanjut ke formulir untuk terbit Tiket QR Antrean.")
     );
   }
   const kekuranganSkor =

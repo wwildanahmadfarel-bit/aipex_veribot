@@ -264,7 +264,7 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
                 Terbit Tiket QR
               </h3>
               <p className="text-[11px] text-slate-500 leading-snug line-clamp-1 mt-0.5">
-                Dapatkan tiket antrean Fast-Track.
+                Dapatkan tiket antrean QR — lolos AI atau verifikasi loket.
               </p>
             </div>
           </div>
@@ -525,15 +525,17 @@ export const PortalHome: React.FC<PortalHomeProps> = ({
 
           <details className="group bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
             <summary className="flex items-center justify-between cursor-pointer text-xs sm:text-sm font-bold text-slate-900 list-none">
-              <span>Bagaimana cara kerja Jalur Khusus (Fast-Track) Tiket VeriBot?</span>
+              <span>Bagaimana cara kerja Tiket QR Antrean VeriBot?</span>
               <span className="material-symbols-outlined transition-transform group-open:rotate-180 text-[#2563eb]">
                 expand_more
               </span>
             </summary>
             <p className="text-xs text-slate-600 mt-3 leading-relaxed border-t border-slate-100 pt-3">
-              Warga yang berkasnya mencapai skor validasi AI minimal 75% akan mendapatkan QR Tiket Prioritas.
-              Di loket fisik kantor kelurahan, pemegang tiket ini langsung dipanggil ke meja verifikator
-              tanpa mengisi formulir kertas tambahan.
+              Semua dokumen kependudukan yang valid memperoleh tiket QR antrean. Skor validasi AI minimal
+              70% berlabel <b>Diterima — Lolos Pra-Pemeriksaan</b>; skor di bawah 70% atau foto buram
+              tetap terbit dengan label <b>Diterima — Verifikasi Loket</b>. Di loket, pemegang tiket
+              dipanggil ke meja verifikator tanpa mengisi formulir kertas tambahan. QR ini tiket antrean,
+              bukan bukti dokumen sah.
             </p>
           </details>
         </div>

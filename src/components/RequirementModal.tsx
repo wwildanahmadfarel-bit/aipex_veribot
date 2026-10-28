@@ -90,8 +90,9 @@ export const RequirementModal: React.FC<RequirementModalProps> = ({
               verified
             </span>
             <span>
-              <strong>Jalur Fast-Track:</strong> Berkas yang lolos pra-pemeriksaan AI VeriBot akan
-              langsung diproses petugas tanpa formulir tambahan di loket!
+              <strong>Tiket QR Antrean:</strong> Berkas yang lolos pra-pemeriksaan AI VeriBot (skor ≥70%)
+              akan langsung diproses petugas tanpa formulir tambahan di loket. Skor di bawah 70% tetap
+              mendapat tiket QR dengan label <strong>Verifikasi Loket</strong>.
             </span>
           </div>
         </div>

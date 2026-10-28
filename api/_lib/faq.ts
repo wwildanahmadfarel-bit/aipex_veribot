@@ -30,19 +30,19 @@ export function getOfflineFaqAnswer(text: string): string | null {
     return "🛡️ **Kepatuhan Privasi UU PDP (UU No. 27 Tahun 2022):**\nFoto e-KTP/KK warga disimpan SEMENTARA terenkripsi di penyimpanan privat — hanya terlihat petugas dan pemilik tiket — lalu dihapus otomatis (purge) seketika tiket disetujui/ditolak. Foto tiket terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen kependudukan untuk rekap.";
   }
   if (lower.includes("jam") || lower.includes("buka") || lower.includes("operasional") || lower.includes("tutup") || lower.includes("jadwal")) {
-    return "🕒 **Jam Operasional Loket Kelurahan Sukamaju:**\n• **Senin - Kamis:** 08.00 - 15.30 WIB\n• **Jumat:** 08.00 - 14.30 WIB\n• **Sabtu, Minggu & Libur Nasional:** Loket fisik tutup.\n\nLayanan online mandiri **AIPEX VeriBot** tetap aktif 24 jam nonstop untuk pra-pemeriksaan berkas dan tiket antrean Fast-Track!";
+    return "🕒 **Jam Operasional Loket Kelurahan Sukamaju:**\n• **Senin - Kamis:** 08.00 - 15.30 WIB\n• **Jumat:** 08.00 - 14.30 WIB\n• **Sabtu, Minggu & Libur Nasional:** Loket fisik tutup.\n\nLayanan online mandiri **AIPEX VeriBot** tetap aktif 24 jam nonstop untuk pra-pemeriksaan berkas dan Tiket QR Antrean!";
   }
   if (lower.includes("ktp") || lower.includes("e-ktp")) {
     if (lower.includes("hilang")) {
-      return "🪪 **Syarat Pengurusan KTP Hilang:**\n1. Surat Keterangan Kehilangan dari Polsek setempat.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak perlu surat pengantar RT/RW (Perpres No. 96/2018).\n\n💡 *Tips:* Unggah foto berkas KK Anda di menu pra-pemeriksaan untuk mendapatkan Tiket Fast-Track tanpa antre lama di loket!";
+      return "🪪 **Syarat Pengurusan KTP Hilang:**\n1. Surat Keterangan Kehilangan dari Polsek setempat.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak perlu surat pengantar RT/RW (Perpres No. 96/2018).\n\n💡 *Tips:* Unggah foto berkas KK Anda di menu pra-pemeriksaan untuk mendapatkan Tiket QR Antrean tanpa antre lama di loket!";
     }
     if (lower.includes("rusak")) {
       return "🪪 **Syarat Penggantian KTP Rusak:**\n1. Membawa fisik e-KTP lama yang rusak.\n2. Fotokopi Kartu Keluarga (KK).\n3. Tidak dipungut biaya (Gratis 100%).\n\nSilakan gunakan fitur OCR VeriBot untuk memverifikasi kejelasan dokumen sebelum ke kantor kelurahan.";
     }
-    return "🪪 **Syarat Pembuatan KTP-EL Baru (Pemula Usia 17 Tahun):**\n1. Cukup bawa Fotokopi Kartu Keluarga (KK).\n2. Tidak memerlukan surat pengantar RT/RW sesuai Perpres No. 96 Tahun 2018.\n3. Perekaman foto & sidik jari dilakukan langsung di loket kelurahan.\n\nUnggah foto KK Anda sekarang untuk reservasi antrean Fast-Track!";
+    return "🪪 **Syarat Pembuatan KTP-EL Baru (Pemula Usia 17 Tahun):**\n1. Cukup bawa Fotokopi Kartu Keluarga (KK).\n2. Tidak memerlukan surat pengantar RT/RW sesuai Perpres No. 96 Tahun 2018.\n3. Perekaman foto & sidik jari dilakukan langsung di loket kelurahan.\n\nUnggah foto KK Anda sekarang untuk reservasi Tiket QR Antrean!";
   }
   if (lower.includes("fast-track") || lower.includes("tiket") || lower.includes("antre") || lower.includes("prioritas") || lower.includes("qr")) {
-    return "⚡ **Jalur Fast-Track Tiket VeriBot:**\nWarga yang berkas kependudukannya lulus uji pra-pemeriksaan AI (skor kejelasan minimal 70%) otomatis memperoleh **Tiket QR Code Fast-Track**.\n\nSaat tiba di kantor kelurahan, Anda cukup memindai QR Code di loket prioritas untuk langsung dipanggil petugas tanpa perlu antre manual dan tanpa mengisi formulir kertas ulang.";
+    return "⚡ **Tiket QR Antrean VeriBot:**\nSemua dokumen kependudukan yang valid (KTP, KK, KIA, akta, surat pindah) dapat memperoleh **Tiket QR Antrean**.\n\n• Skor kejelasan ≥70%: label **Diterima — Lolos Pra-Pemeriksaan**.\n• Skor <70% atau foto buram: label **Diterima — Verifikasi Loket** — QR tetap terbit, tetapi dokumen asli tetap diperiksa petugas.\n• Bukan dokumen kependudukan: QR tidak diterbitkan.\n\nQR ini tiket antrean, bukan bukti dokumen sah.";
   }
   if (lower.includes("kia") || lower.includes("anak")) {
     return "👶 **Syarat Kartu Identitas Anak (KIA):**\n1. Fotokopi Akta Kelahiran anak.\n2. Fotokopi Kartu Keluarga (KK) orang tua.\n3. Fotokopi KTP-EL kedua orang tua.\n4. Pasfoto berwarna ukuran 3x4 sebanyak 2 lembar (khusus anak usia di atas 5 tahun). Untuk usia 0-5 tahun tidak memerlukan foto.";
@@ -63,10 +63,10 @@ export function getOfflineFaqAnswer(text: string): string | null {
 }
 
 export const FAQ_FALLBACK_REPLY =
-  "Halo Warga Sukamaju! Saya **VeriBot AI**, asisten cerdas pelayanan kependudukan Kelurahan Sukamaju.\n\nSilakan tanyakan seputar:\n• Syarat KTP-EL Baru / Hilang / Rusak\n• Prosedur Jalur Antrean Cepat (Fast-Track Tiket QR)\n• Pembuatan KIA, KK, dan Akta Pencatatan Sipil\n• Jadwal loket & standar pelayanan tanpa surat pengantar RT/RW.";
+  "Halo Warga Sukamaju! Saya **VeriBot AI**, asisten cerdas pelayanan kependudukan Kelurahan Sukamaju.\n\nSilakan tanyakan seputar:\n• Syarat KTP-EL Baru / Hilang / Rusak\n• Prosedur Tiket QR Antrean\n• Pembuatan KIA, KK, dan Akta Pencatatan Sipil\n• Jadwal loket & standar pelayanan tanpa surat pengantar RT/RW.";
 
 export const FAQ_EMERGENCY_REPLY =
-  "Halo Warga Sukamaju! Saya VeriBot siap membantu Anda. Untuk pengurusan dokumen kependudukan (KTP, KK, KIA), loket buka Senin-Kamis 08.00-15.30 WIB dan Jumat 08.00-14.30 WIB. Anda dapat langsung mengunggah foto berkas di formulir mandiri untuk mendapatkan Tiket Fast-Track!";
+  "Halo Warga Sukamaju! Saya VeriBot siap membantu Anda. Untuk pengurusan dokumen kependudukan (KTP, KK, KIA), loket buka Senin-Kamis 08.00-15.30 WIB dan Jumat 08.00-14.30 WIB. Anda dapat langsung mengunggah foto berkas di formulir mandiri untuk mendapatkan Tiket QR Antrean!";
 
 export const FAQ_SYSTEM_PROMPT = `Anda adalah "Asisten Pintar VeriBot", petugas customer service AI resmi Kelurahan Sukamaju (Kecamatan Maju Sejahtera) dalam sistem AIPEX VeriBot (DIGIForward 2026).
 Tugas Anda adalah melayani warga kelurahan secara ramah, sopan, ringkas, dan jelas dalam bahasa Indonesia.
@@ -86,7 +86,7 @@ Informasi Resmi Kelurahan Sukamaju:
 - Akta Kematian: Surat Kematian dari RS/Dokter/Kelurahan, KTP almarhum, KK, KTP 2 saksi.
 - Akta Perkawinan: Surat nikah keagamaan, KTP suami istri, KK, pasfoto berdampingan.
 - Surat Pindah (SKPWNI): KK asli, KTP pemohon, form permohonan pindah.
-- Jalur Khusus Fast-Track: Warga yang berkasnya lulus pra-pemeriksaan AI (skor kejelasan minimal 70%) akan memperoleh Tiket QR Prioritas. Saat ke kantor kelurahan, cukup tunjukkan QR Tiket di loket tanpa perlu antre panjang manual atau mengisi form kertas lagi.
+- Tiket QR Antrean: Dokumen kependudukan valid selalu memperoleh tiket QR. Skor kejelasan minimal 70% berlabel "Diterima — Lolos Pra-Pemeriksaan"; skor di bawah 70% atau foto buram tetap terbit dengan label "Diterima — Verifikasi Loket". Bukan dokumen kependudukan tidak diterbitkan QR. QR ini tiket antrean, bukan bukti dokumen sah.
 - UU PDP Compliance: Foto dokumen disimpan sementara terenkripsi di penyimpanan privat (terlihat petugas + pemilik tiket), dihapus otomatis (purge) seketika tiket disetujui/ditolak; foto terbengkalai dihapus maksimal 7 hari. Yang tercatat permanen hanya jenis dokumen kependudukan untuk rekap.
 
 Jawablah secara informatif, hangat, solutif, dan tidak bertele-tele (maksimal 2-3 paragraf). Pisahkan tiap paragraf dengan satu baris kosong. Pakai **tebal** untuk istilah penting dan daftar "•" untuk rincian (maksimal 5 butir).`;

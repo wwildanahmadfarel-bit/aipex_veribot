@@ -14,12 +14,16 @@ import {
   AlertCircle,
   Calendar,
   Download,
-  Printer,
+  FileSpreadsheet,
+  Loader2,
   Camera,
   KeyRound,
-  LockKeyhole
+  LockKeyhole,
+  X
 } from 'lucide-react';
 import { AipexLogo } from './AipexLogo';
+import AdminMonthlyChart from './AdminMonthlyChart';
+import { BULAN_PANJANG, isApprovedStatus, isRejectedStatus, parseTicketMonth } from '../lib/monthLabels';
 import { downloadTicketQrPng } from '../lib/ticketQr';
 import {
   authFetch,
@@ -39,6 +43,7 @@ export interface Ticket {
   nik: string;
   nama: string;
   no_hp?: string;
+  alamat?: string;
   jenis_dokumen: string;
   skor_kejelasan: number;
   status_verifikasi: 'BERHASIL' | 'BURAM' | 'TIDAK_VALID' | 'DISETUJUI' | 'DITOLAK' | 'PERLU_PERBAIKAN' | 'PENDING' | 'MENUNGGU';
@@ -382,6 +387,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
           nik: item.nik || item.nik_raw || '—',
           nama: item.nama || item.nama_warga || 'Pemohon Kependudukan',
           no_hp: pickPhone(item),
+          alamat: String(item.alamat || '').trim() || undefined,
           jenis_dokumen: item.jenis_dokumen || 'KTP',
           skor_kejelasan: Number(item.skor_kejelasan ?? item.skor_ai ?? 0),
           status_verifikasi: (item.status_verifikasi || 'BERHASIL') as Ticket['status_verifikasi'],
@@ -490,27 +496,15 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
   const totalRejected = tickets.filter(t => ['DITOLAK', 'REJECTED', 'TIDAK_VALID'].includes(String(t.status_verifikasi || '').toUpperCase())).length;
 
   // --- Rekap bulanan tiket masuk (dihitung client-side dari tickets yang termuat) ---
-  const BULAN_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-  const BULAN_PANJANG = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
   const nowRef = new Date();
   const [rekapBulan, setRekapBulan] = useState<number>(nowRef.getMonth());
   const [rekapTahun, setRekapTahun] = useState<number>(nowRef.getFullYear());
 
-  const parseTicketMonth = (raw: unknown): { y: number; m: number } | null => {
-    if (!raw) return null;
-    const s = String(raw).trim();
-    // Format campuran: ISO ("2026-09-08T07:23") dan "YYYY-MM-DD HH:mm".
-    const d = new Date(s.includes(' ') && !s.includes('T') ? s.replace(' ', 'T') : s);
-    if (!isNaN(d.getTime())) return { y: d.getFullYear(), m: d.getMonth() };
-    const m = /(\d{4})-(\d{2})/.exec(s);
-    if (m) {
-      const mm = Number(m[2]);
-      if (mm >= 1 && mm <= 12) return { y: Number(m[1]), m: mm - 1 };
-    }
-    return null;
-  };
-  const isAppr = (s: unknown) => ['DISETUJUI', 'APPROVED'].includes(String(s || '').toUpperCase());
-  const isRej = (s: unknown) => ['DITOLAK', 'REJECTED', 'TIDAK_VALID'].includes(String(s || '').toUpperCase());
+  // State ekspor Excel: NIK disamarkan secara default (UU PDP).
+  const [excelOpen, setExcelOpen] = useState<boolean>(false);
+  const [excelMaskNik, setExcelMaskNik] = useState<boolean>(true);
+  const [excelLoading, setExcelLoading] = useState<boolean>(false);
+  const [excelError, setExcelError] = useState<string>('');
 
   const tahunList = useMemo(() => {
     const set = new Set<number>();
@@ -535,15 +529,14 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
       if (p.y !== rekapTahun) return;
       const b = rows[p.m];
       b.masuk += 1;
-      if (isAppr(t.status_verifikasi)) b.disetujui += 1;
-      else if (isRej(t.status_verifikasi)) b.ditolak += 1;
+      if (isApprovedStatus(t.status_verifikasi)) b.disetujui += 1;
+      else if (isRejectedStatus(t.status_verifikasi)) b.ditolak += 1;
       else b.sisa += 1;
     });
     return { monthly: rows, rekapInvalid: invalid };
   }, [tickets, rekapTahun]);
 
   const bulanIni = monthly[rekapBulan];
-  const maxBulanan = Math.max(1, ...monthly.map((r) => r.masuk));
   const totalTahun = monthly.reduce((acc, r) => acc + r.masuk, 0);
 
   const downloadRekapCsv = () => {
@@ -562,6 +555,40 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+
+  // Ekspor Excel bulan terpilih — dynamic import agar library/chunk Excel tidak
+  // ikut bundle awal dan TIDAK menambah Serverless Function Vercel.
+  const handleExportExcel = async () => {
+    setExcelLoading(true);
+    setExcelError('');
+    try {
+      const { exportMonthlyExcel } = await import('../lib/excelExport');
+      const result = await exportMonthlyExcel({
+        year: rekapTahun,
+        month: rekapBulan,
+        maskNik: excelMaskNik,
+        tickets: tickets.map((t) => ({
+          kode_tiket: t.kode_tiket,
+          nik: t.nik,
+          nama: t.nama,
+          no_hp: t.no_hp,
+          alamat: t.alamat,
+          jenis_dokumen: t.jenis_dokumen,
+          skor_kejelasan: t.skor_kejelasan,
+          status_verifikasi: t.status_verifikasi,
+          catatan: t.catatan,
+          created_at: t.created_at,
+        })),
+      });
+      setExcelOpen(false);
+      // Ringkasan kecil supaya petugas tahu file mana yang baru diunduh.
+      console.info(`[excel] ${result.fileName}: ${result.count} tiket, sheet ${result.sheets.join(', ')}`);
+    } catch (err) {
+      setExcelError(err instanceof Error ? err.message : 'Gagal membuat file Excel.');
+    } finally {
+      setExcelLoading(false);
+    }
   };
 
   if (authChecked && officer && mustChangePassword) {
@@ -682,7 +709,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
               <XCircle className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-xs text-slate-500 font-medium">Ditolak / Buram</p>
+              <p className="text-xs text-slate-500 font-medium">Ditolak</p>
               <h3 className="text-xl font-bold text-red-500">{totalRejected} Tiket</h3>
             </div>
           </div>
@@ -690,7 +717,6 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
 
         {/* REKAP BULANAN TIKET MASUK */}
         <div id="adminRekap" className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          <style>{`@media print { body * { visibility: hidden; } #adminRekap, #adminRekap * { visibility: visible; } #adminRekap { position: absolute; left: 0; top: 0; width: 100%; border: none; } #adminRekap .no-print { display: none !important; } }`}</style>
           <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl border border-blue-100 shrink-0">
@@ -735,46 +761,27 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="h-9 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer"
-                title="Cetak rekap bulanan"
+                onClick={() => {
+                  setExcelError('');
+                  setExcelOpen(true);
+                }}
+                className="h-9 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+                title={`Ekspor laporan ${BULAN_PANJANG[rekapBulan]} ${rekapTahun} ke Excel`}
               >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Cetak</span>
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Ekspor Excel</span>
               </button>
             </div>
           </div>
 
-          <div className="p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Grafik batang 12 bulan */}
-            <div>
-              <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Grafik {rekapTahun} (total {totalTahun})</p>
-              <div className="flex items-end gap-1.5 h-40 bg-slate-50 border border-slate-200/60 rounded-xl p-3">
-                {monthly.map((r, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setRekapBulan(i)}
-                    aria-label={`Rekap ${BULAN_PANJANG[i]}: ${r.masuk} masuk`}
-                    title={`${BULAN_PANJANG[i]}: ${r.masuk} masuk (${r.disetujui} setuju, ${r.ditolak} tolak, ${r.sisa} sisa)`}
-                    className={`flex-1 flex flex-col items-center justify-end gap-1 h-full rounded-lg transition cursor-pointer py-3 -my-3 ${i === rekapBulan ? 'bg-blue-50/60' : 'hover:bg-slate-100'}`}
-                  >
-                    <span className="text-[10px] font-bold text-slate-600">{r.masuk > 0 ? r.masuk : ''}</span>
-                    <div className="w-full max-w-[28px] flex flex-col-reverse rounded-md overflow-hidden border border-slate-200 bg-white" style={{ height: `${Math.max(4, Math.round((r.masuk / maxBulanan) * 100))}%` }}>
-                      {r.disetujui > 0 && <div className="bg-emerald-500" style={{ height: `${Math.round((r.disetujui / Math.max(1, r.masuk)) * 100)}%` }} />}
-                      {r.ditolak > 0 && <div className="bg-red-500" style={{ height: `${Math.round((r.ditolak / Math.max(1, r.masuk)) * 100)}%` }} />}
-                      {r.sisa > 0 && <div className="bg-amber-400" style={{ height: `${Math.round((r.sisa / Math.max(1, r.masuk)) * 100)}%` }} />}
-                    </div>
-                    <span className={`text-[10px] font-semibold ${i === rekapBulan ? 'text-blue-700' : 'text-slate-400'}`}>{BULAN_LABEL[i]}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-3 mt-2 text-[10px] text-slate-500">
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" /> Disetujui</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Ditolak</span>
-                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block" /> Perlu verifikasi</span>
-              </div>
-            </div>
+          <div className="p-4 sm:p-5 space-y-5">
+            <AdminMonthlyChart
+              monthly={monthly}
+              selectedMonth={rekapBulan}
+              onSelectMonth={setRekapBulan}
+              year={rekapTahun}
+              totalTahun={totalTahun}
+            />
 
             {/* Tabel 12 bulan */}
             <div>
@@ -1187,6 +1194,112 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
         </React.Suspense>
       )}
 
+      {/* MODAL EKSPOR EXCEL BULANAN */}
+      {excelOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-[#1E293B]/70 backdrop-blur-xs p-4 animate-in fade-in duration-200"
+          onClick={() => {
+            if (!excelLoading) setExcelOpen(false);
+          }}
+        >
+          <div
+            className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="excelExportTitle"
+          >
+            <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3 bg-slate-50/70">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 shrink-0">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 id="excelExportTitle" className="text-sm font-bold text-[#0F172A]">
+                    Ekspor Laporan Excel
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {BULAN_PANJANG[rekapBulan]} {rekapTahun} • satu file, beberapa sheet
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExcelOpen(false)}
+                disabled={excelLoading}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-50 transition cursor-pointer"
+                aria-label="Tutup dialog ekspor"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-[11px] text-slate-600 space-y-1.5">
+                <p className="font-semibold text-slate-700">
+                  Laporan-Layanan-{rekapTahun}-{String(rekapBulan + 1).padStart(2, '0')}.xlsx
+                </p>
+                <p>Sheet <b>Rekap</b> + satu sheet per layanan yang ada datanya.</p>
+                <p>Kolom: kode tiket, tanggal, NIK, nama, no. HP, alamat, urusan, skor AI, status tiket, status verifikasi, catatan.</p>
+                <p className="text-slate-400">QR tidak dimasukkan sebagai gambar — cukup kode tiket.</p>
+              </div>
+
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 transition cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!excelMaskNik}
+                  onChange={(e) => setExcelMaskNik(!e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+                <span className="text-xs text-slate-700">
+                  <b>Sertakan NIK lengkap</b>
+                  <span className="block text-[11px] text-slate-500 mt-0.5">
+                    Default disamarkan (UU PDP). Centang hanya untuk arsip resmi yang aman.
+                  </span>
+                </span>
+              </label>
+
+              {!excelMaskNik && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  NIK lengkap akan terlihat di file Excel. Simpan file di tempat aman dan jangan dibagikan bebas.
+                </p>
+              )}
+
+              {excelError && (
+                <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {excelError}
+                </p>
+              )}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setExcelOpen(false)}
+                disabled={excelLoading}
+                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 disabled:opacity-50 text-slate-700 text-xs font-semibold transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                disabled={excelLoading}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold transition inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                {excelLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>{excelLoading ? 'Menyiapkan...' : 'Unduh Excel'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1205,12 +1318,12 @@ export function StatusBadge({ status }: { status: string }) {
     case 'PERLU_PERBAIKAN':
       return <span className="px-2.5 py-1 bg-amber-100 text-amber-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><AlertCircle className="w-3 h-3"/> PERLU PERBAIKAN</span>;
     case 'BERHASIL':
-      return <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><Clock className="w-3 h-3"/> SIAP VERIFIKASI</span>;
+      return <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><Clock className="w-3 h-3"/> LOLOS PRA-PEMERIKSAAN</span>;
     case 'BURAM':
-      return <span className="px-2.5 py-1 bg-amber-100 text-amber-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> BURAM</span>;
+      return <span className="px-2.5 py-1 bg-amber-100 text-amber-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> VERIFIKASI LOKET</span>;
     case 'PENDING':
     case 'MENUNGGU':
-      return <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><Clock className="w-3 h-3"/> MENUNGGU</span>;
+      return <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold rounded-lg text-[10px] inline-flex items-center gap-1"><Clock className="w-3 h-3"/> DITERIMA — MENUNGGU</span>;
     default:
       return <span className="px-2.5 py-1 bg-slate-100 text-slate-600 font-bold rounded-lg text-[10px]">{status}</span>;
   }
