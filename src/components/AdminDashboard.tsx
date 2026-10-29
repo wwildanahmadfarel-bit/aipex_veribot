@@ -425,7 +425,7 @@ export function AdminDashboard({ officer: propOfficer, onLogout }: AdminDashboar
       setVerificationLogs([]);
       try {
         const res = await authFetch(
-          `/api/admin/tickets?logs_for=${encodeURIComponent(selectedTicket.id)}`
+          `/api/admin/tickets?logs_for=${encodeURIComponent(selectedTicket.kode_tiket)}`
         );
         if (!alive) return;
         if (res.status === 401) {

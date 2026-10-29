@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RotateCw, Square, Volume2 } from "lucide-react";
 import { isSpeechSupported, prepareVoices, speak, stopSpeaking } from "../lib/speech";
 

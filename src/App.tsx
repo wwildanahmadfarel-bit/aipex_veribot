@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Header } from "./components/Header";
 import { Footer } from "./components/Footer";
 import { PortalHome } from "./components/PortalHome";

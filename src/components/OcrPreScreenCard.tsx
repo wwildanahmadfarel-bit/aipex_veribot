@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { OcrPreScreenResult, PreScreenInitialData, PreScreenPage } from "../types";
-import { BLUR_SEVERITY_STYLE, blurAreaLabel, normalizeBlurAreas } from "../lib/blurAreas";
+import { BLUR_SEVERITY_STYLE, blurAreaLabel } from "../lib/blurAreas";
 import { buildScanRecommendations } from "../lib/recommendations";
 import { BUKAN_KTP_MESSAGE } from "../lib/messages";
 import { JENIS_META, isNikWajib, jenisLabel } from "../lib/jenisDokumen";

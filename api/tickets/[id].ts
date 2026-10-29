@@ -1,5 +1,5 @@
 import { readJsonBody, setCors } from "../_lib/http.js";
-import { getSupabase, memTickets, toPublicTicket } from "../_lib/store.js";
+import { getSupabase, memTickets, ticketLookupFilter, toPublicTicket } from "../_lib/store.js";
 import { officerUnauthorized, requireOfficer } from "../_lib/officer-auth.js";
 import { PHOTO_PURGE_AUDIT_NOTE } from "../_lib/file-guard.js";
 
@@ -31,7 +31,17 @@ function buildPublicTimeline(ticket: any, logs: any[] = []): PublicTimelineItem[
   for (const log of logs) {
     const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
     // Log rollback adalah audit internal, bukan status final untuk warga.
-    if (/^\[ROLLBACK/i.test(note)) continue;
+    // Batalkan juga entri keputusan yang gagal di-rollback agar warga tidak
+    // melihat "Disetujui" padahal statusnya sudah dikembalikan.
+    if (/^\[ROLLBACK/i.test(note)) {
+      const attempted = String(log?.status_sebelumnya || "").toUpperCase().trim();
+      const last = timeline[timeline.length - 1];
+      if (attempted && timeline.length > 1 && last?.status === attempted) {
+        timeline.pop();
+        seen.delete(`${last.status}|${String(last.created_at || "")}|${last.catatan || ""}`);
+      }
+      continue;
+    }
     const status = String(log?.status_baru || "").toUpperCase().trim();
     if (!status) continue;
     const key = `${status}|${String(log?.created_at || "")}|${note}`;
@@ -91,7 +101,7 @@ export default async function handler(req: any, res: any) {
           const { data, error } = await supabase
             .from("tickets")
             .select("*")
-            .ilike("kode_tiket", id)
+            .eq("kode_tiket", id)
             .maybeSingle();
           if (!error && data) {
             const found = toPublicTicket(data);
@@ -146,7 +156,7 @@ export default async function handler(req: any, res: any) {
           await supabase
             .from("tickets")
             .update({ status_verifikasi: status_verifikasi, catatan: catatan_petugas || undefined })
-            .or(`id.eq.${id},kode_tiket.eq.${id}`);
+            .or(ticketLookupFilter(id));
         } catch (dbErr) {
           console.warn("Supabase update ticket status warning:", dbErr);
         }

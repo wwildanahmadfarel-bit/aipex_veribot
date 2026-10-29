@@ -46,6 +46,7 @@ import {
   JENIS_DOKUMEN_VALID,
   JENIS_NIK_OPSIONAL,
   normalizeJenisDokumen,
+  ticketLookupFilter,
 } from "./api/_lib/store";
 import { answerFaq, FAQ_EMERGENCY_REPLY } from "./api/_lib/faq";
 import {
@@ -537,8 +538,6 @@ async function startServer() {
     try {
       let fileBytes: Buffer | null = null;
       let mimeType = "image/jpeg";
-      // Salinan foto untuk arsip sementara terenkripsi (diisi setelah AI selesai).
-      let fotoCopy: Buffer | null = null;
 
       if (req.file && req.file.buffer) {
         fileBytes = req.file.buffer;
@@ -943,12 +942,8 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
           },
         });
       }
-      // Foto sudah selesai dipakai AI: salin untuk arsip sementara terenkripsi,
-      // lalu nol-kan buffer asli (panjang tak berubah, aman untuk log size).
-      fotoCopy = null;
-      try {
-        if (fileBytes) fotoCopy = Buffer.from(fileBytes);
-      } catch {}
+      // Foto sudah selesai dipakai AI: nol-kan buffer asli
+      // (panjang tak berubah, aman untuk log size).
       try {
         if (fileBytes) fileBytes.fill(0);
       } catch {}
@@ -1208,7 +1203,17 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     for (const log of logs) {
       const note = cleanPublicNote(log?.catatan_petugas ?? log?.catatan);
       // Log rollback adalah audit internal, bukan status final untuk warga.
-      if (/^\[ROLLBACK/i.test(note)) continue;
+      // Batalkan juga entri keputusan yang gagal di-rollback agar warga tidak
+      // melihat "Disetujui" padahal statusnya sudah dikembalikan.
+      if (/^\[ROLLBACK/i.test(note)) {
+        const attempted = String(log?.status_sebelumnya || "").toUpperCase().trim();
+        const last = timeline[timeline.length - 1];
+        if (attempted && timeline.length > 1 && last?.status === attempted) {
+          timeline.pop();
+          seen.delete(`${last.status}|${String(last.created_at || "")}|${last.catatan || ""}`);
+        }
+        continue;
+      }
       const status = String(log?.status_baru || "").toUpperCase().trim();
       if (!status) continue;
       const key = `${status}|${String(log?.created_at || "")}|${note}`;
@@ -1243,7 +1248,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
           const { data, error } = await supabase
             .from("tickets")
             .select("*")
-            .ilike("kode_tiket", kodeTiket)
+            .eq("kode_tiket", kodeTiket)
             .maybeSingle();
 
           if (!error && data) {
@@ -1583,7 +1588,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
             status_verifikasi: status_verifikasi,
             catatan: catatan_petugas || undefined,
           })
-          .or(`id.eq.${id},kode_tiket.eq.${id}`)
+          .or(ticketLookupFilter(id))
           .select();
         if (!error && data && data.length > 0) supabaseUpdated = true;
       } catch (dbErr) {
@@ -1660,7 +1665,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
             const { data: row } = await supabase
               .from("tickets")
               .select("id")
-              .eq("kode_tiket", logsFor)
+              .eq("kode_tiket", logsFor.toUpperCase())
               .maybeSingle();
             ticketId = String((row as any)?.id || "");
           }
@@ -1733,6 +1738,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
     if (!auth.ok) return officerUnauthorized(res, auth.error);
     try {
       const { ticketId, status, catatan, no_hp, nama, jenis_dokumen, kode_tiket } = req.body;
+      let effectiveKode = kode_tiket || ticketId;
       const officerId = auth.officerId;
 
       if (!ticketId || !status) {
@@ -1771,80 +1777,70 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
       // Update di Supabase jika terhubung
       if (supabase) {
         try {
-          const { data: cur } = await supabase
+          const { data: cur, error: curErr } = await supabase
             .from("tickets")
-            .select("id,status_verifikasi")
-            .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`)
-            .single();
+            .select("id,status_verifikasi,kode_tiket,catatan")
+            .or(ticketLookupFilter(ticketId))
+            .maybeSingle();
+          if (curErr) throw curErr;
           currentTicket = cur;
+          // Pakai kode tiket asli dari DB untuk pesan WA & purge foto.
+          if (cur?.kode_tiket) effectiveKode = String(cur.kode_tiket);
 
-          // Coba update dengan updated_at
-          let { data: upd, error: updateError } = await supabase
-            .from("tickets")
-            .update({
-              status_verifikasi: status,
-              catatan: catatan || null,
-              updated_at: new Date().toISOString(),
-            })
-            .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`)
-            .select()
-            .single();
-
-          // Simpan balik nomor koreksi petugas (best-effort; abaikan bila kolom belum ada).
-          if (!updateError && typeof no_hp === "string" && no_hp.trim()) {
-            try {
-              await supabase
-                .from("tickets")
-                .update({ phone: no_hp.trim() })
-                .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`);
-            } catch {}
-          }
-
-          // Fallback bila kolom updated_at belum ada di skema Supabase
-          if (
-            updateError &&
-            (updateError.code === "PGRST204" ||
-              updateError.message?.toLowerCase().includes("updated_at"))
-          ) {
-            const retry = await supabase
+          // Hanya update DB bila tiketnya benar-benar ada. Bila tidak ada,
+          // jatuh ke fallback memori (dev) — jangan memalsukan tiket baru.
+          if (cur) {
+            // Skema `tickets` aktual tidak punya kolom `updated_at`; jangan
+            // sertakan di payload agar tidak memicu PGRST204 + retry sia-sia.
+            const { data: upd, error: updateError } = await supabase
               .from("tickets")
               .update({
                 status_verifikasi: status,
                 catatan: catatan || null,
               })
-              .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`)
+              .eq("id", cur.id)
               .select()
               .single();
-            upd = retry.data;
-            updateError = retry.error;
-          }
-
-          if (updateError) {
-            console.warn("[admin/tickets PATCH] Supabase update error:", updateError);
-          } else {
+            if (updateError) throw updateError;
             updatedTicket = upd;
-          }
 
-          // Catat log tindakan petugas (best-effort: lewati bila FK/CHECK tak terpenuhi)
-          // Penanda purge: foto tidak dipertahankan pasca-keputusan (audit UU PDP).
-          if (isUuid(updatedTicket?.id) && isUuid(officerId) && isValidLogStatus(status)) {
-            const auditNote = catatan ? `${catatan} ${PHOTO_PURGE_AUDIT_NOTE}` : PHOTO_PURGE_AUDIT_NOTE;
-            try {
-              await supabase.from("verification_logs").insert([
-                {
-                  ticket_id: updatedTicket.id,
-                  officer_id: officerId,
-                  status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
-                  status_baru: status,
-                  catatan_petugas: auditNote,
-                },
-              ]);
-            } catch (logErr) {
-              console.warn("[verification_logs] insert skipped:", logErr);
+            // Simpan balik nomor koreksi petugas (best-effort; abaikan bila kolom belum ada).
+            if (typeof no_hp === "string" && no_hp.trim()) {
+              try {
+                await supabase
+                  .from("tickets")
+                  .update({ phone: no_hp.trim() })
+                  .eq("id", cur.id);
+              } catch {}
+            }
+
+            // Catat log tindakan petugas (best-effort: lewati bila FK/CHECK tak terpenuhi)
+            // Penanda purge: foto tidak dipertahankan pasca-keputusan (audit UU PDP).
+            if (isUuid(updatedTicket?.id) && isUuid(officerId) && isValidLogStatus(status)) {
+              const auditNote = catatan ? `${catatan} ${PHOTO_PURGE_AUDIT_NOTE}` : PHOTO_PURGE_AUDIT_NOTE;
+              try {
+                await supabase.from("verification_logs").insert([
+                  {
+                    ticket_id: updatedTicket.id,
+                    officer_id: officerId,
+                    status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
+                    status_baru: status,
+                    catatan_petugas: auditNote,
+                  },
+                ]);
+              } catch (logErr) {
+                console.warn("[verification_logs] insert skipped:", logErr);
+              }
             }
           }
         } catch (dbErr) {
+          // Jangan kirim WA / klaim sukses bila DB gagal diperbarui.
           console.warn("[admin/tickets PATCH] Supabase error:", dbErr);
+          return res.status(500).json({
+            success: false,
+            code: "DB_UPDATE_FAILED",
+            message: "Status TIDAK diubah karena database gagal diperbarui. Coba lagi.",
+          });
         }
       }
 
@@ -1864,14 +1860,17 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         if (!updatedTicket) {
           updatedTicket = tickets[idx];
         }
+        if ((updatedTicket as any)?.ticket_code) {
+          effectiveKode = String((updatedTicket as any).ticket_code);
+        }
       }
 
       if (!updatedTicket) {
-        updatedTicket = {
-          id: ticketId,
-          status_verifikasi: status,
-          catatan: catatan || null,
-        };
+        return res.status(404).json({
+          success: false,
+          code: "TICKET_NOT_FOUND",
+          message: "Tiket tidak ditemukan. Status tidak diubah.",
+        });
       }
 
       // Kirim WA; gagal -> rollback (mode ketat, sama dgn Vercel).
@@ -1880,7 +1879,7 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
           to: String(waTo),
           message: ticketStatusMessage({
             nama: nama || updatedTicket?.nama || updatedTicket?.nama_warga || "Pemohon",
-            kode: kode_tiket || ticketId,
+            kode: effectiveKode,
             jenis: jenis_dokumen || updatedTicket?.jenis_dokumen || "Dokumen",
             status,
             catatan,
@@ -1888,15 +1887,18 @@ PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, sk
         });
         // Keputusan final: purge foto SEKETIKA (sebelum return sukses).
         try {
-          await hapusFotoTiket(kode_tiket || ticketId);
+          await hapusFotoTiket(effectiveKode);
         } catch {}
       } catch (waErr: any) {
         if (supabase && currentTicket?.status_verifikasi) {
           try {
             await supabase
               .from("tickets")
-              .update({ status_verifikasi: currentTicket.status_verifikasi })
-              .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`);
+              .update({
+                status_verifikasi: currentTicket.status_verifikasi,
+                catatan: currentTicket.catatan || null,
+              })
+              .eq("id", currentTicket.id);
           } catch {}
           if (isUuid(updatedTicket?.id) && isUuid(officerId)) {
             try {

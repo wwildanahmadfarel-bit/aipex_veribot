@@ -218,6 +218,18 @@ if (!g.__aipexTickets) {
 }
 export const memTickets: TicketRow[] = g.__aipexTickets;
 
+/** Filter PostgREST aman untuk lookup tiket: UUID -> kolom id, selain itu -> kode_tiket.
+ *  Jangan gabungkan `id.eq` dengan nilai non-UUID: Postgres akan mencoba cast
+ *  ke UUID, melempar 22P02, dan seluruh query gagal. */
+export function ticketLookupFilter(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return `id.eq.${raw.toLowerCase()}`;
+  }
+  const code = raw.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+  return `kode_tiket.eq.${code || "__TIDAK_VALID__"}`;
+}
+
 export function toPublicTicket(row: any): any {
   const rawNik = row.nik || row.nik_raw || "";
   return {

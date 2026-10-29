@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { BULAN_LABEL } from "../lib/monthLabels";
 
 export interface MonthlyRekapRow {
@@ -234,7 +234,7 @@ export default function AdminMonthlyChart({
               <div className="flex gap-2 mt-1">
                 <div className="w-8 shrink-0 sticky left-0 z-10 bg-slate-50" />
                 <div className="flex-1 flex gap-1.5 sm:gap-2 px-1">
-                  {monthly.map((r, i) => {
+                  {monthly.map((_, i) => {
                     const selected = i === selectedMonth;
                     return (
                       <button

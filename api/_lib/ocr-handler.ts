@@ -7,16 +7,12 @@ import {
   BUKAN_KTP_MESSAGE,
   extractNaraApiKey,
   getGeminiClient,
-  getSupabase,
   isNaraConfigured,
   JENIS_DOKUMEN_VALID,
   JENIS_NIK_OPSIONAL,
-  maskNik,
-  memTickets,
   normalizeJenisDokumen,
   normalizeStatusVerifikasi,
   parseAiJsonResponse,
-  type TicketRow,
 } from "./store.js";
 import { parseMultipartBuffer, readJsonBody, readRawBody } from "./http.js";
 import { classifyAiFailure } from "./ai-errors.js";

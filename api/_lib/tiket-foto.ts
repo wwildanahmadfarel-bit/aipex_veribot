@@ -1,14 +1,13 @@
-// Penyimpanan foto sementara tiket — AIPEX VeriBot.
-// Foto dienkripsi AES-256-GCM (kunci per-tiket dari master + IV acak per file)
-// sebelum masuk bucket privat Supabase. Server mendekripsi hanya saat view
-// berizin (petugas Bearer / warga pemilik kode). Dihapus SEKETIKA saat tiket
-// diputus; sweeper menghapus foto tiket terbengkalai. NIK/identitas tidak ikut.
+// Modul baca/purge foto tiket — AIPEX VeriBot.
+// Penulisan arsip foto sudah tidak dipakai: foto diproses in-memory saat OCR
+// lalu buffer-nya dinolkan, sehingga tidak ada foto yang disimpan. Modul ini
+// hanya membaca foto lama (bila ada) dan menghapusnya saat tiket diputus.
 //
 // Env: FOTO_MASTER_KEY (hex 64 char / 32 byte, server-only),
 //      TICKET_FOTO_RETENTION_DAYS (default 7, untuk tiket non-final).
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
-import { getSupabase } from "./store.js";
+import { createDecipheriv, createHmac } from "node:crypto";
+import { getSupabase, ticketLookupFilter } from "./store.js";
 
 export const FOTO_BUCKET = "tiket-fotos";
 
@@ -30,53 +29,6 @@ function ticketKey(kodeTiket: string): Buffer | null {
   return createHmac("sha256", master).update(String(kodeTiket)).digest();
 }
 
-function fotoPathFor(kodeTiket: string, mime: string): string {
-  const ext = /png/i.test(mime || "") ? "png" : /webp/i.test(mime || "") ? "webp" : /pdf/i.test(mime || "") ? "pdf" : "jpg";
-  const safe = String(kodeTiket || "unknown").replace(/[^A-Za-z0-9-]/g, "");
-  return `${safe}/utama.${ext}.enc`;
-}
-
-export interface SimpanFotoResult {
-  ok: boolean;
-  path: string | null;
-  ivHex: string | null;
-  reason?: string;
-}
-
-/** Enkripsi + upload foto utama. Best-effort: gagal -> {ok:false}, tiket tetap terbit. */
-export async function simpanFotoTiket(
-  kodeTiket: string,
-  plain: Buffer,
-  mime: string
-): Promise<SimpanFotoResult> {
-  try {
-    const key = ticketKey(kodeTiket);
-    const supabase = getSupabase();
-    if (!key) return { ok: false, path: null, ivHex: null, reason: "FOTO_MASTER_KEY belum dikonfigurasi." };
-    if (!supabase) return { ok: false, path: null, ivHex: null, reason: "Database tidak terhubung." };
-    if (!plain || plain.length === 0) return { ok: false, path: null, ivHex: null, reason: "Buffer kosong." };
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const enc = Buffer.concat([cipher.update(plain), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    const payload = Buffer.concat([enc, tag]); // tag 16 byte di ekor
-    const path = fotoPathFor(kodeTiket, mime);
-    const { error } = await supabase.storage.from(FOTO_BUCKET).upload(path, payload, {
-      contentType: "application/octet-stream",
-      upsert: true,
-    });
-    if (error) {
-      try {
-        console.warn(`[Foto] upload gagal ${kodeTiket}: ${String(error.message || error).slice(0, 200)}`);
-      } catch {}
-      return { ok: false, path: null, ivHex: null, reason: String(error.message || error).slice(0, 200) };
-    }
-    return { ok: true, path, ivHex: iv.toString("hex") };
-  } catch (err: any) {
-    return { ok: false, path: null, ivHex: null, reason: String(err?.message || err).slice(0, 200) };
-  }
-}
-
 export interface LihatFotoResult {
   ok: boolean;
   bytes: Buffer | null;
@@ -93,7 +45,7 @@ export async function lihatFotoTiket(kodeTiket: string): Promise<LihatFotoResult
     const { data: row, error } = await supabase
       .from("tickets")
       .select("foto_path,foto_iv,jenis_dokumen")
-      .or(`kode_tiket.eq.${kodeTiket},id.eq.${kodeTiket}`)
+      .or(ticketLookupFilter(kodeTiket))
       .maybeSingle();
     const path = (row as any)?.foto_path as string | null;
     const ivHex = (row as any)?.foto_iv as string | null;
@@ -124,7 +76,7 @@ export async function hapusFotoTiket(kodeTiket: string): Promise<boolean> {
     const { data: row } = await supabase
       .from("tickets")
       .select("foto_path")
-      .or(`kode_tiket.eq.${kodeTiket},id.eq.${kodeTiket}`)
+      .or(ticketLookupFilter(kodeTiket))
       .maybeSingle();
     const path = (row as any)?.foto_path as string | null;
     if (path) {
@@ -136,7 +88,7 @@ export async function hapusFotoTiket(kodeTiket: string): Promise<boolean> {
       await supabase
         .from("tickets")
         .update({ foto_path: null, foto_iv: null })
-        .or(`kode_tiket.eq.${kodeTiket},id.eq.${kodeTiket}`);
+        .or(ticketLookupFilter(kodeTiket));
     } catch {}
     try {
       console.log(`[Foto] purge ${kodeTiket}`);

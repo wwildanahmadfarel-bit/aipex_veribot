@@ -1,5 +1,5 @@
 import { readJsonBody, setCors } from "../_lib/http.js";
-import { getSupabase, memTickets } from "../_lib/store.js";
+import { getSupabase, memTickets, ticketLookupFilter } from "../_lib/store.js";
 import { WaError, isWaEnabled, normalizeWa, sendFonnteWa, ticketStatusMessage } from "../_lib/wa.js";
 import { officerUnauthorized, requireOfficer } from "../_lib/officer-auth.js";
 import { PHOTO_PURGE_AUDIT_NOTE } from "../_lib/file-guard.js";
@@ -29,7 +29,7 @@ export default async function handler(req: any, res: any) {
             const { data: row } = await supabase
               .from("tickets")
               .select("id")
-              .eq("kode_tiket", logsFor)
+              .eq("kode_tiket", logsFor.toUpperCase())
               .maybeSingle();
             ticketId = String((row as any)?.id || "");
           }
@@ -111,7 +111,7 @@ export default async function handler(req: any, res: any) {
       const noHp = body.no_hp ?? body.phone ?? body.noHp ?? null;
       const nama = body.nama ?? body.nama_warga ?? "Pemohon";
       const jenisDokumen = body.jenis_dokumen ?? "Dokumen";
-      const kodeTiket = body.kode_tiket ?? ticketId;
+      let kodeTiket = body.kode_tiket ?? ticketId;
       if (!ticketId || !status) {
         return res.status(400).json({ success: false, message: "Data tidak lengkap" });
       }
@@ -147,60 +147,67 @@ export default async function handler(req: any, res: any) {
 
       if (supabase) {
         try {
-          const { data: cur } = await supabase
+          const { data: cur, error: curErr } = await supabase
             .from("tickets")
-            .select("id,status_verifikasi")
-            .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`)
-            .single();
+            .select("id,status_verifikasi,kode_tiket,catatan")
+            .or(ticketLookupFilter(ticketId))
+            .maybeSingle();
+          if (curErr) throw curErr;
           currentTicket = cur;
+          // Pakai kode tiket asli dari DB untuk pesan WA & purge foto,
+          // terutama bila klien hanya mengirim UUID.
+          if (cur?.kode_tiket) kodeTiket = String(cur.kode_tiket);
 
-          let { data: upd, error: updateError } = await supabase
-            .from("tickets")
-            .update({ status_verifikasi: status, catatan: catatan || null, updated_at: new Date().toISOString() })
-            .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`)
-            .select()
-            .single();
-
-          // Simpan balik nomor koreksi petugas (best-effort; abaikan bila kolom belum ada).
-          if (!updateError && normalizeWa(noHp)) {
-            try {
-              await supabase
-                .from("tickets")
-                .update({ phone: String(noHp).trim() })
-                .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`);
-            } catch {}
-          }
-
-          if (updateError && ((updateError as any).code === "PGRST204" || String((updateError as any).message || "").toLowerCase().includes("updated_at"))) {
-            const retry = await supabase
+          // Hanya update DB bila tiketnya benar-benar ada. Bila tidak ada,
+          // jatuh ke fallback memori (dev) — jangan memalsukan tiket baru.
+          if (cur) {
+            // Skema `tickets` aktual tidak punya kolom `updated_at`; jangan
+            // sertakan di payload agar tidak memicu PGRST204 + retry sia-sia.
+            const { data: upd, error: updateError } = await supabase
               .from("tickets")
               .update({ status_verifikasi: status, catatan: catatan || null })
-              .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`)
+              .eq("id", cur.id)
               .select()
               .single();
-            upd = retry.data;
-            updateError = retry.error;
-          }
-          if (!updateError) updatedTicket = upd;
-          // Log best-effort (lewati bila FK UUID / CHECK tidak terpenuhi).
-          // Penanda purge: foto tidak dipertahankan pasca-keputusan (audit UU PDP).
-          // tickets.catatan tetap murni catatan petugas — marker hanya di log.
-          if (isUuid(updatedTicket?.id) && isUuid(officerId) && isValidLogStatus(status)) {
-            const auditNote = catatan ? `${catatan} ${PHOTO_PURGE_AUDIT_NOTE}` : PHOTO_PURGE_AUDIT_NOTE;
-            try {
-              await supabase.from("verification_logs").insert([
-                {
-                  ticket_id: updatedTicket.id,
-                  officer_id: officerId,
-                  status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
-                  status_baru: status,
-                  catatan_petugas: auditNote,
-                },
-              ]);
-            } catch {}
+            if (updateError) throw updateError;
+            updatedTicket = upd;
+
+            // Simpan balik nomor koreksi petugas (best-effort; abaikan bila kolom belum ada).
+            if (normalizeWa(noHp)) {
+              try {
+                await supabase
+                  .from("tickets")
+                  .update({ phone: String(noHp).trim() })
+                  .eq("id", cur.id);
+              } catch {}
+            }
+
+            // Log best-effort (lewati bila FK UUID / CHECK tidak terpenuhi).
+            // Penanda purge: foto tidak dipertahankan pasca-keputusan (audit UU PDP).
+            // tickets.catatan tetap murni catatan petugas — marker hanya di log.
+            if (isUuid(updatedTicket?.id) && isUuid(officerId) && isValidLogStatus(status)) {
+              const auditNote = catatan ? `${catatan} ${PHOTO_PURGE_AUDIT_NOTE}` : PHOTO_PURGE_AUDIT_NOTE;
+              try {
+                await supabase.from("verification_logs").insert([
+                  {
+                    ticket_id: updatedTicket.id,
+                    officer_id: officerId,
+                    status_sebelumnya: currentTicket?.status_verifikasi || "TERKIRIM",
+                    status_baru: status,
+                    catatan_petugas: auditNote,
+                  },
+                ]);
+              } catch {}
+            }
           }
         } catch (dbErr) {
+          // Jangan kirim WA / klaim sukses bila DB gagal diperbarui.
           console.warn("[admin/tickets PATCH] Supabase error:", dbErr);
+          return res.status(500).json({
+            success: false,
+            code: "DB_UPDATE_FAILED",
+            message: "Status TIDAK diubah karena database gagal diperbarui. Coba lagi.",
+          });
         }
       }
 
@@ -216,11 +223,24 @@ export default async function handler(req: any, res: any) {
           updated_at: new Date().toISOString().replace("T", " ").slice(0, 16),
         };
         if (!updatedTicket) updatedTicket = memTickets[idx];
+        if (memTickets[idx].ticket_code) kodeTiket = String(memTickets[idx].ticket_code);
       }
-      if (!updatedTicket) updatedTicket = { id: ticketId, status_verifikasi: status, catatan: catatan || null };
+      if (!updatedTicket) {
+        return res.status(404).json({
+          success: false,
+          code: "TICKET_NOT_FOUND",
+          message: "Tiket tidak ditemukan. Status tidak diubah.",
+        });
+      }
 
       // Kirim WA setelah update. Gagal -> rollback (mode ketat).
-      const waMessage = ticketStatusMessage({ nama, kode: kodeTiket, jenis: jenisDokumen, status, catatan });
+      const waMessage = ticketStatusMessage({
+        nama: (updatedTicket as any)?.nama || nama,
+        kode: kodeTiket,
+        jenis: jenisDokumen,
+        status,
+        catatan,
+      });
       try {
         await sendFonnteWa({ to: String(noHp), message: waMessage });
         // Keputusan final: purge foto SEKETIKA (sebelum return sukses).
@@ -235,8 +255,11 @@ export default async function handler(req: any, res: any) {
           try {
             await supabase
               .from("tickets")
-              .update({ status_verifikasi: currentTicket.status_verifikasi })
-              .or(`id.eq.${ticketId},kode_tiket.eq.${ticketId}`);
+              .update({
+                status_verifikasi: currentTicket.status_verifikasi,
+                catatan: currentTicket.catatan || null,
+              })
+              .eq("id", currentTicket.id);
           } catch {}
           if (isUuid(updatedTicket?.id) && isUuid(officerId)) {
             try {

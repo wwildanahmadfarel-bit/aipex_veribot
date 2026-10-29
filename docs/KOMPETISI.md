@@ -20,7 +20,7 @@ Warga kelurahan sering **ditolak di loket** karena berkas tidak memenuhi syarat:
 2. Dokumen yang valid **otomatis menerbitkan Tiket QR Fast-Track** — di loket cukup pindai QR, tanpa antre manual dan tanpa isi formulir kertas ulang.
 3. Dokumen buram tetap dapat tiket (status revisi) dengan instruksi foto ulang / bawa fisik — warga tidak pernah jalan buntu.
 4. Asisten chat **VeriBot AI** menjawab syarat layanan 24 jam, dengan 4 lapis fallback sehingga tidak pernah menampilkan error ke warga.
-5. Petugas memutus tiket di dashboard (setuju/tolak/perlu perbaikan) dengan notifikasi WhatsApp otomatis dan arsip foto terenkripsi yang ter-purge otomatis.
+5. Petugas memutus tiket di dashboard (setuju/tolak/perlu perbaikan) dengan notifikasi WhatsApp otomatis; foto dokumen diproses in-memory dan tidak disimpan.
 
 ### Target Pengguna
 | Pengguna | Manfaat |
@@ -30,7 +30,7 @@ Warga kelurahan sering **ditolak di loket** karena berkas tidak memenuhi syarat:
 | Kelurahan / investor | Layanan terreplikasi ke kelurahan lain; biaya AI terkendali (cache + rate-limit); patuh UU PDP |
 
 ### Kepatuhan Privasi (UU PDP No. 27/2022)
-Foto dokumen **tidak pernah disimpan permanen**: diproses di memori, disalin terenkripsi AES-256-GCM per-tiket ke bucket privat hanya sementara, lalu **dihapus seketika tiket diputus** (atau maksimal 7 hari oleh sweeper cron). Yang tercatat permanen hanya jenis dokumen dan metadata rekap.
+Foto dokumen **tidak disimpan**: diproses di memori dan buffer-nya dinolkan setelah AI selesai. Yang tercatat permanen hanya jenis dokumen dan metadata rekap. Sisa foto dari versi lama dibersihkan oleh sweeper cron.
 
 ---
 
@@ -62,9 +62,9 @@ Foto dokumen **tidak pernah disimpan permanen**: diproses di memori, disalin ter
 - **Cara kerja (5 lapis, termurah dulu):** honeypot + dwell-time → captcha adaptif → rate-limit terpusat Upstash Redis (`20x/10 mnt/IP, 20x/hari/IP, 300x/hari global`) → validasi magic-bytes/dimensi → dedup hash SHA-256 + cache hasil 24 jam (file sama = nol token).
 - **Lokasi:** `api/_lib/rate-limit.ts`, `api/_lib/file-guard.ts`, `api/_lib/ocr-cache.ts`, `src/lib/antiSpam.ts`
 
-### F6 — Arsip Foto Sementara Terenkripsi + Sweeper
-- **Manfaat:** petugas bisa melihat bukti foto saat memutus, lalu bukti lenyap otomatis.
-- **Cara kerja:** kunci per-tiket `HMAC(master, kode_tiket)`, enkripsi AES-256-GCM + IV acak, upload ke bucket privat `tiket-fotos`; cron harian menghapus foto tiket terbengkalai.
+### F6 — Pembersihan Foto Lama + Sweeper
+- **Manfaat:** memastikan sisa foto dari versi lama tidak menumpuk dan terhapus otomatis.
+- **Cara kerja:** versi aktif **tidak menyimpan foto baru** — foto diproses in-memory saat OCR lalu buffer-nya dinolkan. Cron harian tetap menghapus objek lama di bucket privat `tiket-fotos` dan mengosongkan `foto_path`/`foto_iv`.
 - **Lokasi:** `api/_lib/tiket-foto.ts`, `api/cron/purge-tiket-foto.ts`, `api/tickets/foto.ts`
 
 ### F7 — Evaluasi Foto Asli + Transparansi Hibrida (batch ycwc-001)
@@ -135,7 +135,7 @@ const finalStatus = isBerhasil ? "BERHASIL" : "BURAM";
 const dbPayload = { kode_tiket: kodeTiket, nik: parsed.nik || "0000000000000000",
   nama: parsed.nama || "Tidak Terdeteksi", jenis_dokumen, skor_kejelasan, status_verifikasi: finalStatus, catatan: finalCatatan };
 if (supabase) { /* insert + fallback kolom phone + sembuhkan baris lama NIK sama */ }
-// ... arsip foto terenkripsi (best-effort, tiket tetap valid bila gagal) ...
+// ... foto dokumen diproses in-memory; tidak ada arsip foto baru ...
 return res.json({ success: true, needsRephoto: !isBerhasil, ticket: completeTicketResponse, ... });
 ```
 
@@ -179,7 +179,7 @@ if (res.status === 404 || res.status >= 500)                         // cadangan
 | `POST /api/chat-faq` | `api/chat-faq.ts` | Chatbot FAQ 4 lapis |
 | `POST /api/tickets`, `GET /api/tickets/:kode` | `api/tickets.ts`, `api/tickets/[id].ts` | Tiket publik (pelacakan per kode; daftar massal ditutup) |
 | `POST /api/admin/login`, `GET/PATCH /api/admin/tickets` | `api/admin/*.ts` | Login JWT + putusan + WA |
-| `GET /api/tickets/foto` | `api/tickets/foto.ts` | Proksi foto terdekripsi (no-store) |
+| `GET /api/tickets/foto` | `api/tickets/foto.ts` | Proksi foto lama/legacy (no-store) |
 | `GET /api/health`, `GET /api/providers` | `api/health.ts`, `api/providers.ts` | Diagnosis + status AI |
 | `GET /api/cron/purge-tiket-foto` | `api/cron/purge-tiket-foto.ts` | Sweeper harian (cron) |
 | Dev lokal | `server.ts` | Express + multer (paritas Vercel) |
