@@ -45,6 +45,26 @@ export function pickIndonesianVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
   return bestScore >= 10 ? best : null;
 }
 
+// Cache daftar suara. Chrome mengisi getVoices() secara async; tanpa cache,
+// speak() bisa menunggu 800 ms pada bacaan pertama. Cache juga menghindari
+// pemanggilan getVoices() berulang di setiap utterance.
+let cachedVoices: SpeechSynthesisVoice[] = [];
+let cachedVoice: SpeechSynthesisVoice | null = null;
+
+function refreshVoiceCache(): SpeechSynthesisVoice[] {
+  if (!isSpeechSupported()) return cachedVoices;
+  try {
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      cachedVoices = voices;
+      cachedVoice = pickIndonesianVoice(voices);
+    }
+  } catch {
+    // Pertahankan cache lama bila browser melempar error.
+  }
+  return cachedVoices;
+}
+
 /**
  * Beberapa browser baru mengisi daftar suara setelah event `voiceschanged`.
  * Panggil saat komponen mount (bukan tepat sebelum bicara) agar speak() siap.
@@ -53,17 +73,35 @@ export function pickIndonesianVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
 export function prepareVoices(onReady?: () => void): () => void {
   if (!isSpeechSupported()) return () => {};
   const synth = window.speechSynthesis;
+  let notified = false;
+  const notify = () => {
+    if (notified) return;
+    if (refreshVoiceCache().length === 0) return;
+    notified = true;
+    onReady?.();
+  };
+
+  if (refreshVoiceCache().length > 0) {
+    notified = true;
+    onReady?.();
+    return () => {};
+  }
+
+  const handler = () => notify();
+  let timer: number | undefined;
   try {
-    if (typeof synth.getVoices === "function" && synth.getVoices().length > 0) {
-      onReady?.();
-      return () => {};
-    }
-    const handler = () => onReady?.();
     synth.addEventListener("voiceschanged", handler);
+    // Sebagian browser mengisi daftar setelah tick tanpa memicu event.
+    timer = window.setTimeout(notify, 0);
     return () => {
       try {
         synth.removeEventListener("voiceschanged", handler);
       } catch {}
+      if (timer !== undefined) {
+        try {
+          window.clearTimeout(timer);
+        } catch {}
+      }
     };
   } catch {
     return () => {};
@@ -78,12 +116,11 @@ let speakGeneration = 0;
 function speakWithVoices(clean: string, onDone?: () => void): void {
   try {
     const synth = window.speechSynthesis;
-    synth.cancel();
     const utterance = new SpeechSynthesisUtterance(clean);
     utterance.lang = "id-ID";
     utterance.rate = 0.92;
     utterance.pitch = 1;
-    const voice = pickIndonesianVoice(synth.getVoices());
+    const voice = cachedVoice || pickIndonesianVoice(refreshVoiceCache());
     if (voice) utterance.voice = voice;
     let finished = false;
     const finish = () => {
@@ -103,7 +140,8 @@ function speakWithVoices(clean: string, onDone?: () => void): void {
 }
 
 /**
- * Bacakan teks. Selalu cancel dulu agar tidak tumpang tindih.
+ * Bacakan teks. Hanya cancel bila ada bacaan lama yang benar-benar aktif;
+ * cancel() saat idle membuat Chrome/Edge menunda utterance berikutnya.
  * Bila daftar suara browser belum termuat (Chrome mengisinya async), tunggu
  * `voiceschanged` maks ±0,8 dtk agar bacaan PERTAMA sudah memakai suara
  * Indonesia perempuan pilihan — bukan suara default sistem (bisa laki-laki).
@@ -121,20 +159,32 @@ export function speak(text: string, onDone?: () => void): boolean {
 
   const myGen = ++speakGeneration;
   const synth = window.speechSynthesis;
+
+  // Jangan panggil cancel() saat tidak ada suara aktif. Pada Chrome/Edge,
+  // cancel() yang langsung diikuti speak() dapat menunda suara 0,2–1 detik.
+  const hadActiveSpeech = Boolean(synth.speaking || synth.pending || synth.paused);
+  if (hadActiveSpeech) {
+    try {
+      synth.cancel();
+    } catch {}
+  }
+
+  // onDone hanya boleh mengubah status tombol milik bacaan ini. Saat bacaan
+  // baru dimulai, generation berubah dan callback bacaan lama diabaikan.
+  const done = () => {
+    if (myGen === speakGeneration) onDone?.();
+  };
   const start = () => {
     // Sudah dihentikan / diganti bacaan lain → jangan bersuara.
     if (myGen !== speakGeneration) return;
-    speakWithVoices(clean, onDone);
+    speakWithVoices(clean, done);
   };
 
-  let voices: SpeechSynthesisVoice[] = [];
-  try {
-    voices = synth.getVoices();
-  } catch {
-    voices = [];
-  }
+  const voices = refreshVoiceCache();
   if (voices.length > 0) {
-    start();
+    // Beri engine waktu membersihkan antrean lama; bacaan pertama langsung.
+    if (hadActiveSpeech) window.setTimeout(start, 100);
+    else start();
     return true;
   }
 
@@ -148,13 +198,21 @@ export function speak(text: string, onDone?: () => void): boolean {
       window.clearTimeout(timer);
     } catch {}
   };
-  const onVoices = () => {
+  const finishWaiting = () => {
     if (settled) return;
     settled = true;
     cleanup();
+    refreshVoiceCache();
     start();
   };
-  const timer = window.setTimeout(onVoices, 800);
+  const onVoices = () => {
+    if (settled) return;
+    // Event bisa terpicu sebelum daftar benar-benar terisi; tunggu event/timer
+    // berikutnya agar bacaan pertama tetap memakai suara Indonesia.
+    if (refreshVoiceCache().length === 0) return;
+    finishWaiting();
+  };
+  const timer = window.setTimeout(finishWaiting, 800);
   try {
     synth.addEventListener("voiceschanged", onVoices);
   } catch {}
@@ -165,7 +223,12 @@ export function stopSpeaking(): void {
   if (!isSpeechSupported()) return;
   speakGeneration++; // batalkan juga bacaan yang masih menunggu daftar suara
   try {
-    window.speechSynthesis.cancel();
+    const synth = window.speechSynthesis;
+    // Hanya cancel bila ada suara aktif. cancel() saat idle membuat Chrome
+    // menunda bacaan berikutnya (mis. auto-play setelah hasil muncul).
+    if (synth.speaking || synth.pending || synth.paused) {
+      synth.cancel();
+    }
   } catch {}
 }
 

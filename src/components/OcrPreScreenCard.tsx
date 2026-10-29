@@ -161,6 +161,9 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
   const [pageResults, setPageResults] = useState<PreScreenPage[]>([]);
   const [selectedPageIndex, setSelectedPageIndex] = useState<number>(0);
   const [mainPageIndex, setMainPageIndex] = useState<number>(0);
+  // ID hasil scan untuk auto-baca. Stabil saat area blur diperbarui di
+  // belakang layar, sehingga speech tidak ter-restart/cancel.
+  const [scanResultId, setScanResultId] = useState<number>(0);
   const previewResult = pageResults[selectedPageIndex]?.result ?? INITIAL_RESULT;
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -215,6 +218,31 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
     setMainPageIndex(0);
     setIsScanning(false);
     setIsScanned(true);
+  };
+
+  /**
+   * Fallback ketajaman lokal dijalankan SETELAH hasil tampil agar tidak
+   * menunda auto-baca. Setiap halaman diperbarui satu per satu; race-guard
+   * memakai scanIdRef supaya hasil scan lama tidak menimpa scan baru.
+   */
+  const enrichPagesInBackground = async (myScanId: number, pages: PreScreenPage[]) => {
+    const next = [...pages];
+    for (let i = 0; i < next.length; i++) {
+      if (myScanId !== scanIdRef.current) return;
+      try {
+        const enriched = await enrichBlurEstimate(next[i].result);
+        if (myScanId !== scanIdRef.current) return;
+        if (enriched === next[i].result) continue;
+        next[i] = {
+          ...next[i],
+          result: enriched,
+          verification: toVerificationResult(enriched),
+        };
+        setPageResults([...next]);
+      } catch {
+        // Analisis lokal bersifat best-effort; jangan ganggu hasil OCR.
+      }
+    }
   };
 
   const isSupportedFile = (file: File): boolean => {
@@ -415,9 +443,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
           const data = await requestPageOcr(page.imageBase64, pageLabel, myScanId);
           if (myScanId !== scanIdRef.current) return;
           const parsed = parseOcrPageResponse(data, page.imageBase64, page.imageName);
-          const enriched = await enrichBlurEstimate(parsed.result);
-          if (myScanId !== scanIdRef.current) return;
-          collected.push(makePreScreenPage(page, enriched));
+          collected.push(makePreScreenPage(page, parsed.result));
           setPageResults([...collected]);
         } catch (err: any) {
           if (myScanId !== scanIdRef.current) return;
@@ -505,8 +531,14 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
       setMainPageIndex(finalMain);
       setSelectedPageIndex(finalMain);
       setCooldown();
+      setScanResultId(myScanId);
       setIsScanning(false);
       setIsScanned(true);
+
+      // Hasil + auto-baca tampil lebih dulu; fallback ketajaman lokal menyusul.
+      window.setTimeout(() => {
+        void enrichPagesInBackground(myScanId, collected);
+      }, 0);
     })();
   };
   const handleCustomFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -828,7 +860,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                     <SpeakResultButton
                       text={summarySpeech}
                       autoPlay
-                      autoPlayKey={pageResults}
+                      autoPlayKey={`summary-${scanResultId}`}
                       idleLabel="Bacakan Ringkasan"
                     />
                     <span className="text-[10px] font-mono text-slate-500 bg-white border border-slate-200 rounded-md px-2 py-1">
@@ -1079,7 +1111,7 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                       catatan: isSystemError ? undefined : previewResult.catatan,
                     })}
                     autoPlay={isLayak}
-                    autoPlayKey={previewResult}
+                    autoPlayKey={`page-${scanResultId}-${selectedPageIndex}`}
                   />
                 )}
                 <button

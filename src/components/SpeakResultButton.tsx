@@ -36,6 +36,7 @@ export function SpeakResultButton({
   const supported = isSpeechSupported();
   const lastAutoKey = useRef<unknown>(null);
   const mountedRef = useRef(true);
+  const speakingRef = useRef(false);
 
   // Catat status mount agar timer auto-baca tidak berbunyi setelah komponen hilang.
   useEffect(() => {
@@ -44,6 +45,10 @@ export function SpeakResultButton({
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    speakingRef.current = speaking;
+  }, [speaking]);
 
   // Siapkan daftar suara lebih awal (voiceschanged) + hentikan audio saat unmount.
   useEffect(() => {
@@ -56,8 +61,11 @@ export function SpeakResultButton({
   }, [supported]);
 
   // Teks berganti (hasil pindai baru) = hentikan bacaan lama agar tidak tumpang tindih.
+  // Jangan panggil stopSpeaking saat mount/idle: cancel() yang tidak perlu membuat
+  // Chrome menunda auto-baca pertama.
   useEffect(() => {
     if (!supported) return;
+    if (!speakingRef.current) return;
     stopSpeaking();
     setSpeaking(false);
   }, [text, supported]);
