@@ -74,6 +74,8 @@ export interface BlurArea {
   severity: "high" | "medium" | "low";
   bbox: [number, number, number, number];
   description: string;
+  /** True bila kotak berasal dari perkiraan analisis lokal, bukan vonis AI. */
+  estimated?: boolean;
 }
 
 export interface PrescreeningResult {

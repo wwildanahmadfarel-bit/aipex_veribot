@@ -34,6 +34,8 @@ export interface ScanRecommendations {
 
 /** Ambang resmi server (api/_lib/ocr-handler.ts: skor >= 70 = BERHASIL). */
 export const SKOR_MIN = 70;
+/** Di bawah 80 AI seharusnya menandai area buram; dipakai untuk peringatan UI. */
+export const SKOR_TAJAM_MIN = 80;
 
 /** Syarat pelengkap khas per jenis dokumen — untuk tindak lanjut di loket. */
 const SYARAT_PELENGKAP: Record<string, string> = {
@@ -80,7 +82,7 @@ function tipForArea(rawArea: string): string {
     .replace(/[\s-]+/g, "_");
   return (
     AREA_TIPS[key] ||
-    `Bagian ${blurAreaLabel(key)} terdeteksi kurang jelas — dekatkan kamera dan fokuskan ulang pada bagian tersebut.`
+    `${blurAreaLabel(key)} terdeteksi kurang jelas — dekatkan kamera dan fokuskan ulang pada bagian tersebut.`
   );
 }
 
@@ -142,27 +144,50 @@ export function buildScanRecommendations(input: ScanRecommendationInput): ScanRe
   }
 
   // 3) Area kurang jelas — tips spesifik per area (prioritas keparahan, maks 3).
+  //    Dedupe per jenis area: fallback lokal bisa menghasilkan beberapa kotak
+  //    "lainnya" yang sama; satu rekomendasi per area sudah cukup.
   const urutanSeverity: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const seenAreas = new Set<string>();
   const areaPrioritas = [...blurAreas]
     .sort((a, b) => (urutanSeverity[a.severity] ?? 1) - (urutanSeverity[b.severity] ?? 1))
+    .filter((a) => {
+      const key = String(a.area || "lainnya").trim().toLowerCase();
+      if (seenAreas.has(key)) return false;
+      seenAreas.add(key);
+      return true;
+    })
     .slice(0, 3);
   for (const area of areaPrioritas) {
     perbaikan.push({
       kind: "perbaikan",
       severity: area.severity === "high" ? "high" : "medium",
-      title: `Perbaiki bagian ${blurAreaLabel(area.area)}`,
-      detail: tipForArea(area.area),
+      title: `Perbaiki bagian ${blurAreaLabel(area.area)}${area.estimated ? " (perkiraan)" : ""}`,
+      detail:
+        tipForArea(area.area) +
+        (area.estimated
+          ? " Area ini diperkirakan dari analisis ketajaman lokal; periksa juga seluruh permukaan dokumen."
+          : ""),
     });
   }
 
-  // 4) Skor kejelasan di bawah ambang (hanya bila tidak ada tips area spesifik).
-  if (areaPrioritas.length === 0 && skor > 0 && skor < SKOR_MIN) {
+  // 4) Skor kejelasan di bawah standar tajam. Ini juga menangkap kasus
+  //    skor 70–79 yang statusnya BERHASIL tetapi areanya tidak terpetakan AI.
+  if (
+    areaPrioritas.length === 0 &&
+    (skor > 0 && skor < SKOR_TAJAM_MIN || input.lulus === false)
+  ) {
+    const diBawahAmbangLulus = skor > 0 && skor < SKOR_MIN;
     perbaikan.push({
       kind: "perbaikan",
-      severity: "medium",
-      title: `Kejelasan foto ${skor}/100 (minimal ${SKOR_MIN})`,
-      detail:
-        "Foto ulang di tempat terang dengan cahaya alami tanpa flash, letakkan dokumen di permukaan datar, dan pastikan seluruh bingkai kartu masuk frame.",
+      severity: diBawahAmbangLulus ? "high" : "medium",
+      title: diBawahAmbangLulus
+        ? `Kejelasan foto ${skor}/100 (minimal ${SKOR_MIN})`
+        : skor > 0
+          ? `Kejelasan foto ${skor}/100 — di bawah standar tajam ${SKOR_TAJAM_MIN}`
+          : "Kejelasan dokumen perlu diperiksa",
+      detail: diBawahAmbangLulus
+        ? "Foto ulang di tempat terang dengan cahaya alami tanpa flash, letakkan dokumen di permukaan datar, dan pastikan seluruh bingkai kartu masuk frame."
+        : "AI menilai dokumen masih kurang tajam, tetapi area buram tidak berhasil dipetakan otomatis. Periksa seluruh teks, foto wajah, dan tepi dokumen; foto ulang di tempat terang tanpa flash bila perlu.",
     });
   }
 

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { OcrPreScreenResult, PreScreenInitialData, PreScreenPage } from "../types";
-import { BLUR_SEVERITY_STYLE, blurAreaLabel } from "../lib/blurAreas";
+import { BLUR_SEVERITY_STYLE, blurAreaLabel, hasEstimatedBlurAreas } from "../lib/blurAreas";
 import { buildScanRecommendations } from "../lib/recommendations";
 import { BUKAN_KTP_MESSAGE } from "../lib/messages";
 import { JENIS_META, isNikWajib, jenisLabel } from "../lib/jenisDokumen";
@@ -31,6 +31,7 @@ import {
   isUsablePage,
   mainPageIdentityNote,
   toVerificationResult,
+  enrichBlurEstimate,
   type PreparedOcrPage,
 } from "../lib/preScreenPages";
 import {
@@ -414,7 +415,9 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
           const data = await requestPageOcr(page.imageBase64, pageLabel, myScanId);
           if (myScanId !== scanIdRef.current) return;
           const parsed = parseOcrPageResponse(data, page.imageBase64, page.imageName);
-          collected.push(makePreScreenPage(page, parsed.result));
+          const enriched = await enrichBlurEstimate(parsed.result);
+          if (myScanId !== scanIdRef.current) return;
+          collected.push(makePreScreenPage(page, enriched));
           setPageResults([...collected]);
         } catch (err: any) {
           if (myScanId !== scanIdRef.current) return;
@@ -637,6 +640,14 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
       previewResult.jenis_dokumen === "LAINNYA" ||
       previewResult.status_kejelasan === "DITOLAK");
   const isLayak = previewResult.status_kelayakan === "LAYAK" && !isTidakValid && !isSystemError;
+  const blurAreas = previewResult.blur_areas || [];
+  const blurEstimated = hasEstimatedBlurAreas(blurAreas);
+  const blurNeedsManualCheck =
+    !isSystemError &&
+    !isTidakValid &&
+    blurAreas.length === 0 &&
+    previewResult.skor_kejelasan > 0 &&
+    previewResult.skor_kejelasan < 80;
   // NIK parsial ("12345678 (sebagian)") harus tetap tampil, bukan "Tidak Terdeteksi".
   const nikDigitsShown = previewResult.nik_value.replace(/\D/g, "");
   const nikPartialShown = !previewResult.nik_terdeteksi && nikDigitsShown.length > 0;
@@ -1017,9 +1028,9 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                   >
                     {previewResult.catatan}
                   </p>
-                  {!isSystemError && (previewResult.blur_areas?.length || 0) > 0 && (
+                  {!isSystemError && blurAreas.length > 0 && (
                     <ul className="mt-2 space-y-1">
-                      {(previewResult.blur_areas || []).map((a, i) => {
+                      {blurAreas.map((a, i) => {
                         const style = BLUR_SEVERITY_STYLE[a.severity] || BLUR_SEVERITY_STYLE.medium;
                         return (
                           <li key={`blur-legend-${i}`} className="flex items-start gap-1.5 text-[11px] leading-snug">
@@ -1036,6 +1047,19 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                         );
                       })}
                     </ul>
+                  )}
+                  {blurEstimated && (
+                    <p className="mt-1.5 text-[10px] leading-snug text-amber-800/90">
+                      Kotak bergaris putus-putus adalah perkiraan dari analisis ketajaman lokal,
+                      bukan vonis AI. Periksa tetap seluruh permukaan dokumen.
+                    </p>
+                  )}
+                  {blurNeedsManualCheck && (
+                    <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+                      <b>Area buram tidak dapat dipetakan otomatis.</b> AI menilai dokumen kurang
+                      tajam ({previewResult.skor_kejelasan}/100). Periksa seluruh teks, foto, dan
+                      tepi dokumen; foto ulang di tempat terang bila perlu.
+                    </div>
                   )}
                 </div>
               </div>
@@ -1145,12 +1169,14 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                         alt="Pratinjau Dokumen"
                         className="block max-h-[160px] w-auto max-w-full object-contain rounded-lg shadow-md border border-slate-800"
                       />
-                      {(previewResult.blur_areas || []).map((a, i) => {
+                      {blurAreas.map((a, i) => {
                         const style = BLUR_SEVERITY_STYLE[a.severity] || BLUR_SEVERITY_STYLE.medium;
                         return (
                           <div
                             key={`blur-box-${i}`}
-                            className={`absolute rounded-sm border ${style.box}`}
+                            className={`absolute rounded-sm border ${style.box} ${
+                              a.estimated ? "border-dashed" : ""
+                            }`}
                             style={{
                               left: `${a.bbox[0]}%`,
                               top: `${a.bbox[1]}%`,
@@ -1166,6 +1192,13 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                           </div>
                         );
                       })}
+                      {blurNeedsManualCheck && (
+                        <div className="pointer-events-none absolute inset-1 rounded-md border-2 border-dashed border-amber-400 bg-amber-300/10">
+                          <span className="absolute left-1 top-1 rounded bg-amber-400 px-1 py-0.5 text-[8px] font-bold leading-none text-amber-950">
+                            Periksa seluruh dokumen
+                          </span>
+                        </div>
+                      )}
                     </div>
                   ) : previewResult.imageBase64 ? (
                     <div className="py-6 text-center text-slate-300">
@@ -1238,9 +1271,11 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                     <p className="text-[11px] text-slate-500">
                       {isSystemError
                         ? "Belum dinilai (gangguan sistem)."
-                        : isLayak
+                        : isLayak && previewResult.skor_kejelasan >= 80
                           ? "DPI tajam & kontras teks sangat jelas."
-                          : "Huruf kabur pada area NIK."}
+                          : isLayak
+                            ? "Lolos ambang, tetapi beberapa bagian masih kurang tajam."
+                            : "Dokumen dinilai kurang tajam — periksa area yang ditandai."}
                     </p>
                   </div>
 

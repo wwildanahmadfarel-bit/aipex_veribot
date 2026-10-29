@@ -135,7 +135,7 @@ Sumber: `src/data/servicesData.ts` (9 layanan):
 9. Surat Keterangan Usaha SKU (`perpindahan`)
 
 - `PortalHome` punya search + filter kategori + kartu seragam. Tombol `Syarat` → `RequirementModal` (daftar mandatory/opsional). Tombol `Pilih Layanan` → buka Wizard dengan layanan terpilih.
-- **Formulir SIDNOK yang dapat diunduh:** `src/data/sidnokDownloads.ts` memetakan 9 PDF resmi SIDNOK Kota Semarang ke layanan yang membutuhkannya. File disalin ke `public/berkas/sidnok/` agar tombol **Unduh** langsung bekerja tanpa bergantung pada situs eksternal. Sumber asli tetap ditautkan per formulir dan ke `https://sidnok.semarangkota.go.id/download`.
+- **Formulir SIDNOK yang dapat diunduh:** `src/data/sidnokDownloads.ts` memetakan 9 PDF resmi SIDNOK Kota Semarang ke layanan yang membutuhkannya. File disalin ke `public/berkas/sidnok/` agar tombol **Unduh** langsung bekerja tanpa bergantung pada situs eksternal. Tidak ada tautan keluar ke SIDNOK di UI; bila layanan tidak punya formulir unduhan, modal hanya menampilkan keterangan netral.
 - Formulir tampil di `RequirementModal` (bagian “Formulir yang Perlu Diunduh”, badge **Wajib jika berlaku**) dan di Wizard Langkah 2 (versi ringkas). Formulir bersifat **kondisional dan tidak memblokir pengajuan** — yang tetap memblokir hanya slot upload wajib.
 - Formulir **F2.01** (akta kelahiran/kematian) dan **F-1.08** (surat pindah) tidak tersedia di SIDNOK. Keduanya diberi keterangan “disediakan di loket”, bukan tautan unduhan fiktif.
 

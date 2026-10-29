@@ -11,16 +11,22 @@ const MEM_CAP = 300;
 export const OCR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function cacheKey(fileHash: string): string {
-  // v2: invalidation setelah dukungan jenis dokumen diperluas (akta kematian/
-  // perkawinan, surat pindah, KIA) — vonis lama "TIDAK_VALID" tidak boleh nyangkut.
-  return `rl:ocr-cache:v2:${fileHash}`;
+  // v3: prompt blur_areas diperketat — hasil v2 yang kosong di skor 70–79
+  // tidak boleh dipakai lagi (UI sempat tidak menampilkan area buram).
+  return `rl:ocr-cache:v3:${fileHash}`;
 }
 
 export function isCacheableParsed(parsed: any): boolean {
   if (!isUsableAiParsed(parsed)) return false;
   // Hanya cache status final yang sudah dinormalisasi backend.
   const status = String(parsed.status_verifikasi || "").toUpperCase();
-  return ["BERHASIL", "BURAM", "TIDAK_VALID"].includes(status);
+  if (!["BERHASIL", "BURAM", "TIDAK_VALID"].includes(status)) return false;
+  // Jangan cache hasil "bersih" padahal skor masih di bawah standar tajam:
+  // paksa panggilan AI berikutnya memberi area buram yang valid.
+  const score = Number(parsed.skor_kejelasan ?? 0) || 0;
+  const areas = Array.isArray(parsed.blur_areas) ? parsed.blur_areas : [];
+  if (status !== "TIDAK_VALID" && score < 80 && areas.length === 0) return false;
+  return true;
 }
 
 export async function getCachedOcr(fileHash: string): Promise<any | null> {

@@ -74,7 +74,7 @@ Foto dokumen **tidak disimpan**: diproses di memori dan buffer-nya dinolkan sete
 - **Mode demo:** 6 gambar sintetis di batch `demo-001` (`scripts/generate-demo-eval.py`), dibuka di `/transparansi?batch=demo-001` dengan badge DEMO. Metrik demo terpisah dan tidak boleh diklaim sebagai hasil `ycwc-001`.
 
 ### F8 — Formulir Syarat SIDNOK Siap Unduh
-- **Manfaat:** warga bisa mengunduh formulir kondisional (SPTJM/SP) yang sering diminta loket tanpa mencari sendiri di situs SIDNOK; mengurangi berkas kurang dan kunjungan ulang.
+- **Manfaat:** warga bisa mengunduh formulir kondisional (SPTJM/SP) yang sering diminta loket tanpa bergantung pada situs eksternal; mengurangi berkas kurang dan kunjungan ulang.
 - **Cara kerja:** 9 PDF resmi SIDNOK Kota Semarang disalin ke `public/berkas/sidnok/`; metadata terpusat di `src/data/sidnokDownloads.ts`; formulir dipetakan per layanan di `servicesData.ts`. Tampil di modal **Syarat** (`RequirementModal`) dengan badge **Wajib jika berlaku** dan versi ringkas di Wizard Langkah 2 (`DownloadableForms`). Unduhan bersifat panduan/kondisional — tidak menambah slot upload wajib dan tidak memblokir pengajuan. F2.01 dan F-1.08 tidak tersedia di SIDNOK, sehingga diberi keterangan “disediakan di loket”.
 - **Lokasi:** `src/data/sidnokDownloads.ts`, `src/data/servicesData.ts`, `src/components/DownloadableForms.tsx`, `src/components/RequirementModal.tsx`, `src/components/InteractiveWizard.tsx`, `public/berkas/sidnok/`
 

@@ -1,5 +1,4 @@
 import type { ServiceDownload } from "../types";
-import { SIDNOK_DOWNLOAD_PAGE, sidnokFileUrl } from "../data/sidnokDownloads";
 
 interface DownloadableFormsProps {
   downloads?: ServiceDownload[];
@@ -42,18 +41,9 @@ export function DownloadableForms({ downloads = [], compact = false }: Downloada
           <div>
             <p className="font-bold text-slate-800">Tidak ada formulir unduhan khusus.</p>
             <p className="mt-1 leading-relaxed">
-              Siapkan dokumen asli/fotokopi sesuai daftar syarat di atas. Jika Anda perlu memeriksa
-              berkas lain, buka katalog resmi SIDNOK Kota Semarang.
+              Siapkan dokumen asli/fotokopi sesuai daftar syarat di atas. Petugas loket akan
+              membantu bila ada berkas tambahan yang perlu dilengkapi.
             </p>
-            <a
-              href={SIDNOK_DOWNLOAD_PAGE}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 inline-flex min-h-[44px] items-center gap-1 font-bold text-[#2563eb] hover:underline"
-            >
-              Buka katalog SIDNOK
-              <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-            </a>
           </div>
         </div>
       </div>
@@ -91,15 +81,6 @@ export function DownloadableForms({ downloads = [], compact = false }: Downloada
             </li>
           ))}
         </ul>
-        <a
-          href={SIDNOK_DOWNLOAD_PAGE}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-2 inline-flex min-h-[44px] items-center gap-1 text-[10px] font-bold text-amber-800 hover:underline"
-        >
-          Sumber: SIDNOK Kota Semarang
-          <span className="material-symbols-outlined text-[14px]">open_in_new</span>
-        </a>
       </div>
     );
   }
@@ -144,33 +125,16 @@ export function DownloadableForms({ downloads = [], compact = false }: Downloada
             </div>
             <div className="mt-auto flex items-center gap-2">
               <DownloadButton form={form} />
-              <a
-                href={sidnokFileUrl(form.code)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 text-[10px] font-semibold text-slate-500 hover:text-[#2563eb]"
-              >
-                Sumber
-                <span className="material-symbols-outlined text-[14px]">open_in_new</span>
-              </a>
             </div>
           </div>
         ))}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-amber-200/70 pt-2.5">
+      <div className="mt-3 border-t border-amber-200/70 pt-2.5">
         <p className="text-[10px] text-amber-800">
-          Berkas resmi dari SIDNOK Kota Semarang. Beberapa formulir bersifat alternatif — pilih sesuai kondisi.
+          Formulir resmi disiapkan sebagai panduan. Beberapa formulir bersifat alternatif — pilih
+          sesuai kondisi Anda.
         </p>
-        <a
-          href={SIDNOK_DOWNLOAD_PAGE}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex min-h-[36px] items-center gap-1 text-[10px] font-bold text-amber-800 hover:underline"
-        >
-          Lihat semua berkas
-          <span className="material-symbols-outlined text-[14px]">open_in_new</span>
-        </a>
       </div>
     </section>
   );

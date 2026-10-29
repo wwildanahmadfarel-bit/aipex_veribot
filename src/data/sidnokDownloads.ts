@@ -1,13 +1,5 @@
 import type { ServiceDownload } from "../types";
 
-/** Halaman resmi katalog berkas SIDNOK Kota Semarang. */
-export const SIDNOK_DOWNLOAD_PAGE = "https://sidnok.semarangkota.go.id/download";
-
-/** URL berkas resmi SIDNOK (dipakai sebagai tautan sumber/fallback). */
-export function sidnokFileUrl(code: string): string {
-  return `https://sidnok.semarangkota.go.id/get-berkas/${code}`;
-}
-
 /**
  * Formulir resmi SIDNOK yang disalin ke public/berkas/sidnok agar dapat
  * diunduh langsung dari website. Semua formulir bersifat kondisional —

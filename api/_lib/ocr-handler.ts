@@ -65,14 +65,16 @@ Tugas utama Anda:
    - "BURAM": Dokumen kependudukan yang didukung, namun skor kejelasan < 70 (memerlukan foto ulang).
    - "TIDAK_VALID": WAJIB dipakai jika jenis_dokumen "LAINNYA" (gambar bukan dokumen kependudukan resmi Indonesia).
 
-6. Deteksi Area Kurang Jelas (wajib bila skor_kejelasan < 80 dan dokumen kependudukan yang didukung, bukan LAINNYA):
+6. Deteksi Area Kurang Jelas (WAJIB bila skor_kejelasan < 80 dan dokumen kependudukan yang didukung, bukan LAINNYA):
    - Identifikasi bagian dokumen yang buram, silau, gelap, terpotong, atau tidak terbaca.
    - Gunakan istilah baku dokumen untuk "area": "nik", "nama", "foto_wajah", "tanggal_lahir", "tempat_lahir", "jenis_kelamin", "alamat", "rt_rw", "kelurahan", "kecamatan", "agama", "pekerjaan", "kewarganegaraan", "status_perkawinan", "golongan_darah", "berlaku_hingga", "tanda_tangan", "kepala_keluarga", "anggota_keluarga", "nomor_akta", "tanggal_peristiwa", "pasangan", atau "lainnya".
    - "severity": "high" (teks kunci tidak terbaca), "medium" (terbaca sebagian), "low" (terbaca namun kurang tajam).
    - "bbox": [x, y, width, height] dalam PERSEN 0-100 relatif terhadap gambar, (x, y) = pojok kiri atas area. Perkiraan posisi yang wajar sudah cukup.
    - "description": penyebab singkat, contoh "motion blur", "silau flash", "kurang cahaya", "bayangan", "terpotong", "out of focus".
    - Contoh: [{"area":"nik","severity":"high","bbox":[8,42,46,9],"description":"silau flash"}].
-   - Jika seluruh foto tajam (skor >= 80) atau dokumen LAINNYA, kembalikan array kosong [].
+   - PENTING: skor 70–79 tetap berstatus "BERHASIL", tetapi area buram WAJIB diisi. Status BERHASIL bukan alasan mengembalikan array kosong.
+   - Jika skor < 80, blur_areas TIDAK BOLEH kosong: isi minimal 1 dan maksimal 4 area. Bila posisi tidak yakin, tetap berikan bbox perkiraan yang wajar.
+   - Hanya kembalikan [] jika skor >= 80 DAN seluruh teks dinilai tajam, atau dokumen LAINNYA.
 
 7. Catatan Perbaikan (Saran Singkat):
    - Jika status BURAM, berikan 1 kalimat saran konkret (contoh: "Foto KTP terlalu silau di area NIK, harap matikan lampu flash dan ambil ulang foto di tempat terang").
@@ -81,7 +83,7 @@ Tugas utama Anda:
 PENTING: Jawab HANYA dengan JSON valid memakai key: nik, nama, jenis_dokumen, skor_kejelasan, status_verifikasi, catatan, blur_areas.`;
 
 const OCR_USER_PROMPT =
-  "Analisis foto dokumen kependudukan ini. Periksa kejelasan teks, ekstrak NIK 16 digit jika ada, dan tentukan apakah foto layak untuk verifikasi.";
+  "Analisis foto dokumen kependudukan ini. Periksa kejelasan teks, ekstrak NIK 16 digit jika ada, dan tentukan apakah foto layak untuk verifikasi. Jika skor kejelasan di bawah 80, WAJIB isi blur_areas minimal satu area yang kurang jelas.";
 
 /** Batas maksimum area yang ditampilkan agar overlay tidak menutupi seluruh foto. */
 const MAX_BLUR_AREAS = 4;

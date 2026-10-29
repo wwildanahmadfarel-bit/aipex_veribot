@@ -2,6 +2,7 @@
 // PDF dipecah 100% di browser; server hanya menerima satu halaman per request.
 
 import type { OcrPreScreenResult, PreScreenPage, VerificationResult } from "../types";
+import { estimateBlurAreasFromImage } from "./blurAreas";
 import { isNikWajib, jenisLabel, normalizeJenis } from "./jenisDokumen";
 import { BUKAN_KTP_MESSAGE } from "./messages";
 import { revokePreviewUrls, splitPdfClientSide } from "./pdfSplitter";
@@ -282,7 +283,7 @@ export function parseOcrPageResponse(
       imageName,
       status_kelayakan: isLayak ? "LAYAK" : "TIDAK_LAYAK",
       skor_kejelasan: score,
-      status_kejelasan: tidakValid ? "DITOLAK" : isLayak ? "LULUS" : "KURANG_TAJAM",
+      status_kejelasan: tidakValid ? "DITOLAK" : isLayak && score >= 80 ? "LULUS" : "KURANG_TAJAM",
       nik_terdeteksi: nikFull !== null,
       nik_value: tidakValid
         ? "Tidak Terdeteksi"
@@ -320,7 +321,31 @@ function normalizeBlurAreasSafe(raw: unknown): OcrPreScreenResult["blur_areas"] 
         ? (item.bbox.map((n: unknown) => Number(n)) as [number, number, number, number])
         : [0, 0, 100, 100],
       description: String(item.description ?? ""),
+      estimated: item.estimated === true,
     }));
+}
+
+/**
+ * Fallback jujur: bila AI tidak memberi area buram padahal skor < 80,
+ * hitung perkiraan area dari ketajaman lokal di browser. Hasil tetap
+ * ditandai `estimated` dan tidak mengubah skor/status resmi.
+ */
+export async function enrichBlurEstimate(
+  result: OcrPreScreenResult
+): Promise<OcrPreScreenResult> {
+  if (result.isSystemError) return result;
+  if (result.status_verifikasi === "TIDAK_VALID" || result.jenis_dokumen === "LAINNYA") {
+    return result;
+  }
+  if ((result.blur_areas?.length || 0) > 0) return result;
+  if (!(result.skor_kejelasan > 0 && result.skor_kejelasan < 80)) return result;
+
+  const estimated = await estimateBlurAreasFromImage(
+    result.imageBase64,
+    result.skor_kejelasan
+  );
+  if (estimated.length === 0) return result;
+  return { ...result, blur_areas: estimated };
 }
 
 /** Konversi hasil pra-pemeriksaan ke bentuk yang dipakai wizard. */
