@@ -122,18 +122,22 @@ Lokasi: `DocumentScanner.tsx` (varian scanner dengan tiket langsung).
 
 ## 7. Alur Katalog & Syarat Layanan
 
-Sumber: `src/data/servicesData.ts` (8 layanan):
+Sumber: `src/data/servicesData.ts` (9 layanan):
 
 1. Penerbitan KTP-EL Baru/Penggantian (`identitas`)
 2. Kartu Identitas Anak KIA (`identitas`)
 3. Aktivasi Identitas Digital IKD (`identitas`)
-4. Akta Kematian (`sipil`)
-5. Akta Perkawinan (`sipil`)
-6. Surat Pindah SKPWNI (`perpindahan`)
-7. Konsolidasi/Sinkronisasi NIK (`perpindahan`)
-8. Surat Keterangan Usaha SKU (`perpindahan`)
+4. Akta Kelahiran (`sipil`)
+5. Akta Kematian (`sipil`)
+6. Akta Perkawinan (`sipil`)
+7. Surat Pindah SKPWNI (`perpindahan`)
+8. Konsolidasi/Sinkronisasi NIK (`perpindahan`)
+9. Surat Keterangan Usaha SKU (`perpindahan`)
 
 - `PortalHome` punya search + filter kategori + kartu seragam. Tombol `Syarat` → `RequirementModal` (daftar mandatory/opsional). Tombol `Pilih Layanan` → buka Wizard dengan layanan terpilih.
+- **Formulir SIDNOK yang dapat diunduh:** `src/data/sidnokDownloads.ts` memetakan 9 PDF resmi SIDNOK Kota Semarang ke layanan yang membutuhkannya. File disalin ke `public/berkas/sidnok/` agar tombol **Unduh** langsung bekerja tanpa bergantung pada situs eksternal. Sumber asli tetap ditautkan per formulir dan ke `https://sidnok.semarangkota.go.id/download`.
+- Formulir tampil di `RequirementModal` (bagian “Formulir yang Perlu Diunduh”, badge **Wajib jika berlaku**) dan di Wizard Langkah 2 (versi ringkas). Formulir bersifat **kondisional dan tidak memblokir pengajuan** — yang tetap memblokir hanya slot upload wajib.
+- Formulir **F2.01** (akta kelahiran/kematian) dan **F-1.08** (surat pindah) tidak tersedia di SIDNOK. Keduanya diberi keterangan “disediakan di loket”, bukan tautan unduhan fiktif.
 
 ## 8. Alur Petugas (Login + Dashboard)
 

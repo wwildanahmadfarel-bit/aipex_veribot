@@ -236,8 +236,9 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "2. Fotokopi Buku Nikah/Akta Perkawinan orang tua.\n" +
       "3. Fotokopi KK dan KTP-el orang tua.\n" +
       "4. Fotokopi KTP-el 2 orang saksi.\n" +
-      "5. Formulir F2.01.\n\n" +
+      "5. Formulir F2.01 (disediakan di loket).\n\n" +
       "• Tidak dipungut biaya.\n" +
+      "• Formulir SPTJM kelahiran dapat diunduh dari menu Syarat layanan di website.\n" +
       "• Jika surat lahir tidak ada, dapat dilengkapi SPTJM Kelahiran sesuai ketentuan.\n" +
       "• Proses umumnya 1 - 3 hari kerja bila berkas lengkap.",
     keywords: ["akta kelahiran", "akta lahir", "kelahiran", "surat lahir", "sptjm kelahiran"],
@@ -254,8 +255,9 @@ export const FAQ_CATALOG: FaqEntry[] = [
       "2. KTP-el dan KK almarhum/almarhumah.\n" +
       "3. KTP-el pelapor.\n" +
       "4. KTP-el 2 orang saksi.\n" +
-      "5. Formulir F2.01.\n\n" +
+      "5. Formulir F2.01 (disediakan di loket).\n\n" +
       "• Tidak dipungut biaya.\n" +
+      "• Formulir SPTJM kematian dapat diunduh dari menu Syarat layanan di website.\n" +
       "• Jika surat kematian tidak ada, dapat dilengkapi SPTJM Kematian sesuai ketentuan.\n" +
       "• Proses umumnya 1 - 3 hari kerja bila berkas lengkap.",
     keywords: ["akta kematian", "kematian", "surat kematian", "orang meninggal", "sptjm kematian"],

@@ -1,4 +1,5 @@
 import { ServiceCatalogItem } from "../types";
+import { sidnokForms } from "./sidnokDownloads";
 
 export const catalogServices: ServiceCatalogItem[] = [
   {
@@ -85,6 +86,47 @@ export const catalogServices: ServiceCatalogItem[] = [
     ],
   },
   {
+    id: "akta-kelahiran",
+    title: "Akta Kelahiran",
+    category: "sipil",
+    badge: "KELAHIRAN",
+    badgeType: "tertiary",
+    iconName: "child_friendly",
+    description: "Pencatatan kelahiran dan penerbitan kutipan akta kelahiran anak.",
+    requirements: [
+      {
+        title: "Surat Keterangan Lahir dari RS / Bidan / Penolong",
+        description: "Asli. Jika tidak ada, gunakan SPTJM Kebenaran Data Kelahiran.",
+        mandatory: true,
+      },
+      {
+        title: "Fotokopi Buku Nikah / Akta Perkawinan Orang Tua",
+        description: "Untuk membuktikan status perkawinan orang tua.",
+        mandatory: true,
+      },
+      {
+        title: "Fotokopi KK & KTP-el Orang Tua",
+        description: "Data orang tua harus sesuai dengan dokumen kependudukan.",
+        mandatory: true,
+      },
+      {
+        title: "Fotokopi KTP-el 2 Orang Saksi",
+        description: "Saksi yang mengetahui peristiwa kelahiran.",
+        mandatory: true,
+      },
+      {
+        title: "Formulir F2.01",
+        description: "Disediakan di loket; unggah bila sudah diisi.",
+        mandatory: false,
+      },
+    ],
+    downloads: [
+      sidnokForms.sptjmKelahiran,
+      sidnokForms.spAnakIbu,
+      sidnokForms.sptjmPasanganSuamiIstri,
+    ],
+  },
+  {
     id: "akta-kematian",
     title: "Akta Kematian",
     category: "sipil",
@@ -95,7 +137,7 @@ export const catalogServices: ServiceCatalogItem[] = [
     requirements: [
       {
         title: "Surat Kematian dari RS / Puskesmas / Kelurahan",
-        description: "Ditandatangani dokter pemeriksa atau pejabat lingkungan.",
+        description: "Ditandatangani dokter pemeriksa atau pejabat lingkungan. Jika tidak ada, gunakan SPTJM Kebenaran Data Kematian.",
         mandatory: true,
       },
       {
@@ -109,6 +151,7 @@ export const catalogServices: ServiceCatalogItem[] = [
         mandatory: true,
       },
     ],
+    downloads: [sidnokForms.sptjmKematian],
   },
   {
     id: "akta-perkawinan",
@@ -135,6 +178,10 @@ export const catalogServices: ServiceCatalogItem[] = [
         mandatory: true,
       },
     ],
+    downloads: [
+      sidnokForms.sptjmPerkawinanPerceraian,
+      sidnokForms.spAktaKawinDikuasaiPihakLain,
+    ],
   },
   {
     id: "skpwni",
@@ -157,9 +204,14 @@ export const catalogServices: ServiceCatalogItem[] = [
       },
       {
         title: "Formulir Permohonan Pindah (F-1.08)",
-        description: "Dilengkapi alamat tujuan lengkap dengan kode pos.",
+        description: "Disediakan di loket. Lampirkan SP alamat/numpang KK sesuai kondisi tempat tinggal.",
         mandatory: true,
       },
+    ],
+    downloads: [
+      sidnokForms.spAlamatAdminduk,
+      sidnokForms.spTidakKeberatanNumpangKk,
+      sidnokForms.spAlamatRumahSendiri,
     ],
   },
   {

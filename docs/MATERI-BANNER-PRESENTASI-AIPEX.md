@@ -16,7 +16,7 @@
 | Pengguna | Warga dan petugas kelurahan |
 | Masalah | Berkas tidak layak, antrean panjang, bolak-balik, status tidak pasti |
 | Solusi | Pra-pemeriksaan AI, tiket QR, lacak status, dashboard petugas |
-| Bukti utama | 8 layanan, QR teks, Excel 12 sheet, audit log, perlindungan UU PDP |
+| Bukti utama | 9 layanan, QR teks, Excel 12 sheet, audit log, perlindungan UU PDP |
 | URL produksi | `https://aipexveribot.vercel.app` |
 
 **Tagline utama:**
@@ -129,6 +129,7 @@ Callout:
 - Skor di bawah 70? Dapat panduan perbaikan sebelum ke loket.
 - QR berisi teks, tetap terbaca petugas meski jaringan lemah.
 - Tanpa install aplikasi, cukup buka website.
+- Formulir syarat yang kondisional bisa diunduh langsung dari modal syarat dan wizard.
 
 #### Panel 2 — UNTUK PETUGAS
 
@@ -153,9 +154,9 @@ Callout:
 **Data aman:** NIK dimasking • Foto tidak disimpan permanen • Akses petugas terbatas  
 **Layanan lengkap:** Chatbot 24 jam • Halaman transparansi • Notifikasi WhatsApp
 
-#### 8 Layanan
+#### 9 Layanan
 
-KTP-EL • KIA • IKD • Akta Kematian • Akta Perkawinan • SKPWNI • Konsolidasi NIK • SKU
+KTP-EL • KIA • IKD • Akta Kelahiran • Akta Kematian • Akta Perkawinan • SKPWNI • Konsolidasi NIK • SKU
 
 #### Footer
 
@@ -199,7 +200,7 @@ Tanpa antre awal. Tanpa bolak-balik.
 | 1:05–1:50 | Solusi | AI pre-screen + tiket QR + lacak status | Slide 2 |
 | 1:50–3:05 | Demo | Alur warga dari unggah sampai timeline | Demo langsung |
 | 3:05–3:55 | Petugas & keamanan | Dashboard, filter, audit, UU PDP | Slide 4 |
-| 3:55–4:35 | Dampak | 8 layanan, efisiensi, transparansi | Slide 5 |
+| 3:55–4:35 | Dampak | 9 layanan, efisiensi, transparansi | Slide 5 |
 | 4:35–5:00 | Penutup | CTA dan tagline | Slide 6 |
 
 **Target tempo:** 130–140 kata per menit. Beri jeda 1–2 detik setelah pertanyaan pembuka dan setelah kalimat penutup.
@@ -236,7 +237,7 @@ Tanpa antre awal. Tanpa bolak-balik.
 
 #### [3:55–4:35] Dampak — Slide 5
 
-“Dampaknya sederhana tetapi besar. Warga datang sekali, antrean berkurang, petugas lebih fokus pada verifikasi, dan status layanan menjadi transparan. Sistem ini siap untuk 8 layanan: KTP-EL, KIA, IKD, akta kematian, akta perkawinan, surat pindah, konsolidasi NIK, dan surat keterangan usaha. Semua berjalan di Vercel tanpa server tambahan, dengan chatbot 24 jam dan halaman transparansi.”
+“Dampaknya sederhana tetapi besar. Warga datang sekali, antrean berkurang, petugas lebih fokus pada verifikasi, dan status layanan menjadi transparan. Sistem ini siap untuk 9 layanan: KTP-EL, KIA, IKD, akta kelahiran, akta kematian, akta perkawinan, surat pindah, konsolidasi NIK, dan surat keterangan usaha. Formulir syarat yang kondisional juga bisa diunduh langsung dari website. Semua berjalan di Vercel tanpa server tambahan, dengan chatbot 24 jam dan halaman transparansi.”
 
 #### [4:35–5:00] Penutup — Slide 6
 

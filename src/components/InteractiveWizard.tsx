@@ -7,6 +7,7 @@ import { getTicketStatusInfo } from "../lib/ticketStatus";
 import { AipexLogo } from "./AipexLogo";
 import { JENIS_NIK_OPSIONAL, jenisLabel, normalizeJenis } from "../lib/jenisDokumen";
 import { catalogServices } from "../data/servicesData";
+import { DownloadableForms } from "./DownloadableForms";
 import { BLUR_SEVERITY_STYLE, blurAreaLabel, normalizeBlurAreas } from "../lib/blurAreas";
 import { buildScanRecommendations } from "../lib/recommendations";
 import { BUKAN_KTP_MESSAGE } from "../lib/messages";
@@ -123,6 +124,9 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
   // Sumber kebenaran tunggal: servicesData.ts — ubah di sana bila ketentuan berubah.
   const requiredDocs = getRequiredDocsForService(selectedService);
   const supportDocs = requiredDocs.slice(1);
+  // Formulir SIDNOK yang bisa diunduh (kondisional, bukan slot upload wajib).
+  const selectedServiceDownloads =
+    catalogServices.find((s) => s.title === selectedService)?.downloads ?? [];
 
   // ---------------------------------------------------------------------
   // Pemetaan halaman OCR → slot syarat (dokumen utama + lampiran).
@@ -552,6 +556,8 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
       "Penerbitan KIA untuk anak usia 0 sampai kurang dari 17 tahun.",
     "Aktivasi Identitas Digital (IKD)":
       "Pendaftaran & aktivasi aplikasi identitas kependudukan digital Ditjen Dukcapil.",
+    "Akta Kelahiran":
+      "Pencatatan kelahiran anak dan penerbitan kutipan akta kelahiran.",
     "Akta Kematian":
       "Pencatatan resmi kematian warga dengan lampiran surat keterangan medis / RT.",
     "Akta Perkawinan":
@@ -1305,6 +1311,7 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                     </option>
                     <option value="Kartu Identitas Anak (KIA)">Kartu Identitas Anak (KIA)</option>
                     <option value="Aktivasi Identitas Digital (IKD)">Aktivasi Identitas Digital (IKD)</option>
+                    <option value="Akta Kelahiran">Akta Kelahiran</option>
                     <option value="Akta Kematian">Akta Kematian</option>
                     <option value="Akta Perkawinan">Akta Perkawinan</option>
                     <option value="Surat Pindah (SKPWNI)">Surat Pindah (SKPWNI)</option>
@@ -1658,6 +1665,10 @@ export const InteractiveWizard: React.FC<InteractiveWizardProps> = ({
                 </div>
               );
             })()}
+
+            {selectedServiceDownloads.length > 0 && (
+              <DownloadableForms downloads={selectedServiceDownloads} compact />
+            )}
 
             {uploadMode === "combined" ? (
               combinedPages.length > 0 ? (

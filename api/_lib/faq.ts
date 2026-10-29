@@ -62,10 +62,10 @@ Informasi Resmi Kelurahan Sukamaju:
 - KTP-el hilang: surat keterangan kehilangan dari Polsek, fotokopi KK, F1.02. KTP-el rusak: fisik KTP lama, fotokopi KK, F1.02.
 - KK: baru (buku nikah/akta perkawinan, KK asal, KTP-el pasangan); penambahan anggota (KK lama, akta/surat lahir, KTP orang tua); perubahan data (KK lama + dokumen pendukung); hilang (surat kehilangan Polsek); rusak (KK lama).
 - KIA: fotokopi akta kelahiran, KK orang tua, KTP-el orang tua, pasfoto 3x4 2 lembar untuk anak di atas 5 tahun.
-- Akta kelahiran: surat keterangan lahir, fotokopi buku nikah/akta perkawinan, KK dan KTP orang tua, KTP 2 saksi, F2.01. Bisa dilengkapi SPTJM Kelahiran bila surat lahir tidak ada.
-- Akta kematian: surat keterangan kematian, KTP-el dan KK almarhum, KTP pelapor, KTP 2 saksi, F2.01. Bisa dilengkapi SPTJM Kematian bila surat kematian tidak ada.
+- Akta kelahiran: surat keterangan lahir, fotokopi buku nikah/akta perkawinan, KK dan KTP orang tua, KTP 2 saksi, F2.01 (disediakan di loket). Bisa dilengkapi SPTJM Kelahiran bila surat lahir tidak ada; formulir SPTJM dapat diunduh dari menu Syarat layanan.
+- Akta kematian: surat keterangan kematian, KTP-el dan KK almarhum, KTP pelapor, KTP 2 saksi, F2.01 (disediakan di loket). Bisa dilengkapi SPTJM Kematian bila surat kematian tidak ada; formulir SPTJM dapat diunduh dari menu Syarat layanan.
 - Akta perkawinan non-Muslim: surat pemberkatan, KTP-el dan KK mempelai, KTP orang tua, pasfoto 4x6 4 lembar.
-- Surat pindah (SKPWNI): KK asli, KTP-el anggota yang pindah, formulir F1.08, alamat tujuan lengkap.
+- Surat pindah (SKPWNI): KK asli, KTP-el anggota yang pindah, formulir F1.08 (disediakan di loket), alamat tujuan lengkap; SP alamat/numpang KK dapat diunduh dari menu Syarat layanan.
 - IKD: sudah perekaman KTP-el, smartphone Android/iOS, email aktif, verifikasi wajah/QR di loket.
 - SKU: KTP-el dan KK, surat pengantar RT/RW, foto lokasi usaha, formulir.
 - Sinkronisasi NIK: KTP-el dan KK, tangkapan layar kendala, nomor WhatsApp aktif.

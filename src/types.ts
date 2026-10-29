@@ -25,6 +25,20 @@ export interface Ticket {
   riwayat?: TicketTimelineItem[];
 }
 
+export interface ServiceDownload {
+  /** Kode dokumen SIDNOK Kota Semarang. */
+  code: string;
+  title: string;
+  /** Kapan formulir ini perlu diunduh/dipakai. */
+  condition: string;
+  /** Ukuran file untuk tampilan. */
+  size: string;
+  /** Path file statis di public/ (same-origin, agar bisa diunduh langsung). */
+  file: string;
+  /** Nama file saat diunduh. */
+  fileName: string;
+}
+
 export interface ServiceCatalogItem {
   id: string;
   title: string;
@@ -38,6 +52,8 @@ export interface ServiceCatalogItem {
     description: string;
     mandatory: boolean;
   }[];
+  /** Formulir resmi yang perlu diunduh (kondisional, bukan slot upload). */
+  downloads?: ServiceDownload[];
 }
 
 export interface VerificationResult {

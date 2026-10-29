@@ -73,6 +73,11 @@ Foto dokumen **tidak disimpan**: diproses di memori dan buffer-nya dinolkan sete
 - **Lokasi:** `supabase/migrations/20261015_eval_fotos.sql`, `supabase/migrations/20261026_eval_jenis_7.sql`, `api/_lib/eval-foto.ts`, `api/eval/*.ts`, `api/cron/purge-eval-fotos.ts`, `scripts/evaluate-eval-bucket.py`, `scripts/generate-demo-eval.py`, `src/components/TransparencyPage.tsx`, `docs/UJI-PENGGUNA.md`, `docs/METRIK-TRANSPARANSI.md`
 - **Mode demo:** 6 gambar sintetis di batch `demo-001` (`scripts/generate-demo-eval.py`), dibuka di `/transparansi?batch=demo-001` dengan badge DEMO. Metrik demo terpisah dan tidak boleh diklaim sebagai hasil `ycwc-001`.
 
+### F8 — Formulir Syarat SIDNOK Siap Unduh
+- **Manfaat:** warga bisa mengunduh formulir kondisional (SPTJM/SP) yang sering diminta loket tanpa mencari sendiri di situs SIDNOK; mengurangi berkas kurang dan kunjungan ulang.
+- **Cara kerja:** 9 PDF resmi SIDNOK Kota Semarang disalin ke `public/berkas/sidnok/`; metadata terpusat di `src/data/sidnokDownloads.ts`; formulir dipetakan per layanan di `servicesData.ts`. Tampil di modal **Syarat** (`RequirementModal`) dengan badge **Wajib jika berlaku** dan versi ringkas di Wizard Langkah 2 (`DownloadableForms`). Unduhan bersifat panduan/kondisional — tidak menambah slot upload wajib dan tidak memblokir pengajuan. F2.01 dan F-1.08 tidak tersedia di SIDNOK, sehingga diberi keterangan “disediakan di loket”.
+- **Lokasi:** `src/data/sidnokDownloads.ts`, `src/data/servicesData.ts`, `src/components/DownloadableForms.tsx`, `src/components/RequirementModal.tsx`, `src/components/InteractiveWizard.tsx`, `public/berkas/sidnok/`
+
 ---
 
 ## 3. The Code — Kode Paling Inti + Lokasi Screenshot
