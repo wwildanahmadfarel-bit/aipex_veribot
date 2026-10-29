@@ -981,7 +981,9 @@ export const OcrPreScreenCard: React.FC<OcrPreScreenCardProps> = ({ onProceedToW
                           : isTidakValid
                             ? "File Bukan Kartu Kependudukan Indonesia"
                             : isLayak
-                              ? "Dokumen Layak & Terbaca Jelas"
+                              ? previewResult.skor_kejelasan >= 80
+                                ? "Dokumen Layak & Terbaca Jelas"
+                                : "Dokumen Layak — Area Kurang Tajam"
                               : "Foto Buram / Perlu Perbaikan"}
                     </span>
                     <span
